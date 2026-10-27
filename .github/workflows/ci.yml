@@ -15,6 +15,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
+      - run: npm ci
       - run: node --test test/*.test.js
         shell: bash
       - run: node bin/bridgelit-connect.js --help
