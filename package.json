@@ -1,0 +1,35 @@
+{
+  "name": "bridgelit-connect",
+  "version": "0.1.0",
+  "description": "Answer BridgeLit questions with your own Claude or ChatGPT subscription, from your own computer.",
+  "type": "module",
+  "bin": {
+    "bridgelit-connect": "bin/bridgelit-connect.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "README.md",
+    "SECURITY.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "lint": "node --check bin/bridgelit-connect.js && for f in src/*.js; do node --check \"$f\" || exit 1; done"
+  },
+  "keywords": [
+    "bridgelit",
+    "claude",
+    "codex",
+    "chatgpt",
+    "bridge"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nadeem-gh/bridgelit-connect.git"
+  }
+}
