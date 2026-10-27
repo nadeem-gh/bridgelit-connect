@@ -1,8 +1,8 @@
 # BridgeLit Connect
 
 Answer the questions you ask on [BridgeLit](https://bridgelit.net) with **your own Claude or ChatGPT
-subscription**, on your own computer. No copying and pasting between tabs, and no API keys or passwords
-given to BridgeLit.
+subscription, or your own API key**, on your own computer. No copying and pasting between tabs, and no
+passwords or keys given to BridgeLit.
 
 ```
  BridgeLit (reader or author portal)            your computer
@@ -10,22 +10,32 @@ given to BridgeLit.
  │ you type a question           │◄──────────►│ bridgelit-connect            │
  │ server picks book passages    │ (outbound  │  └─ claude -p  (Claude plan) │
  │ shows the checked answer      │   only)    │  └─ codex exec (ChatGPT plan)│
- └───────────────────────────────┘            └──────────────────────────────┘
+ └───────────────────────────────┘            │  └─ your API key (keychain)  │
+                                              └──────────────────────────────┘
 ```
 
 ## Install
 
-You need Node.js 20+ and at least one of:
-
-| AI | Install | Sign in with your plan |
-|----|---------|------------------------|
-| Claude (Pro / Max) | `npm install -g @anthropic-ai/claude-code` | `claude auth login` |
-| ChatGPT (Plus / Pro / Team) | `npm install -g @openai/codex` | `codex login` |
+You need Node.js 20+.
 
 ```bash
 npm install -g github:nadeem-gh/bridgelit-connect
-bridgelit-connect doctor
 ```
+
+Then pick one or more ways to pay for answers:
+
+| Option | Command | What it does |
+|--------|---------|--------------|
+| Claude plan (Pro / Max), no key | `bridgelit-connect setup claude` | Installs Claude Code and runs `claude auth login` |
+| ChatGPT plan (Plus / Pro / Team), no key | `bridgelit-connect setup chatgpt` | Installs OpenAI's Codex CLI and runs `codex login` (choose "Sign in with ChatGPT") |
+| Anthropic API key | `bridgelit-connect key add anthropic` | Checks the key, then stores it in your keychain |
+| OpenAI API key | `bridgelit-connect key add openai` | Checks the key, then stores it in your keychain |
+
+`bridgelit-connect doctor` shows what is ready.
+
+> **ChatGPT without an API key:** the ChatGPT desktop and web apps have no interface that other programs
+> can call. OpenAI's Codex CLI, signed in with your ChatGPT account, is the supported way to use a ChatGPT
+> plan from a program. It runs on your computer and counts against your ChatGPT plan, not an API bill.
 
 ## Connect and run
 
@@ -52,8 +62,14 @@ On Windows, create a Task Scheduler task "At log on" that runs `bridgelit-connec
 | `status` | Shows the server, this computer, and the AIs it offers. |
 | `doctor` | Checks Node, Claude Code and Codex are installed and signed in. |
 | `logout` | Disconnects this computer and deletes its token. |
+| `setup claude\|chatgpt` | Installs Claude Code or Codex and opens its sign-in. |
+| `key add\|remove anthropic\|openai`, `key list` | Manages your own API keys (OS keychain, never uploaded). |
 
-Environment: `BRIDGELIT_SERVER` (default `https://bridgelit.net`), `BRIDGELIT_CLAUDE_PATH`,
+API-key answers use `claude-opus-5-5` and `gpt-5.5` by default. Change them with
+`start --anthropic-model …` or `--openai-model …`. Claude API requests opt into Anthropic's server-side
+refusal fallback (`fallbacks: "default"`).
+
+Environment: `BRIDGELIT_ANTHROPIC_BASE_URL` / `BRIDGELIT_OPENAI_BASE_URL` (proxies only), `BRIDGELIT_SERVER` (default `https://bridgelit.net`), `BRIDGELIT_CLAUDE_PATH`,
 `BRIDGELIT_CODEX_PATH`, `BRIDGELIT_CONNECT_HOME` (config folder),
 `BRIDGELIT_CREDENTIAL_STORE=file` (skip the OS keychain on headless machines).
 
@@ -88,8 +104,11 @@ All device calls send `Authorization: Bridge <token>`. A `401` means the device 
 
 See [SECURITY.md](SECURITY.md). In short:
 
-- Your Claude and ChatGPT logins never leave your computer. API-key variables are hidden from the CLIs so
-  your subscription is used (pass `--use-api-keys` to change this).
+- Your Claude and ChatGPT logins, and any API keys you add, never leave your computer. API keys are sent
+  only to `api.anthropic.com` and `api.openai.com`, even if `ANTHROPIC_BASE_URL` or `OPENAI_BASE_URL` is set
+  for another tool. API-key variables in your shell are hidden from the CLIs so your subscription is used
+  (pass `--use-api-keys` to change this).
+- API-key answers are plain requests with no tools defined.
 - Every run happens in a fresh, empty temporary folder.
   - **Claude:** `--tools ""` turns off every tool. `--strict-mcp-config` with an empty config loads no
     MCP servers. `--no-session-persistence` saves nothing.

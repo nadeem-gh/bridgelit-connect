@@ -31,5 +31,9 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/nadeem-gh/bridgelit-connect.git"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.3.0",
+    "openai": "^7.45.0"
   }
 }

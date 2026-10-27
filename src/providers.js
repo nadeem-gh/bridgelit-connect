@@ -8,9 +8,17 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { API_LABELS, keyedProviders, runApiProvider } from "./apikeys.js";
+import { ProviderError, ToolAttempt } from "./errors.js";
 
-export const PROVIDERS = ["claude", "codex"];
-export const LABELS = { claude: "Claude", codex: "ChatGPT (Codex)" };
+export const PROVIDERS = ["claude", "codex", "anthropic_api", "openai_api"];
+const CLI_PROVIDERS = ["claude", "codex"];
+export const LABELS = {
+  claude: "Claude",
+  codex: "ChatGPT (Codex)",
+  anthropic_api: "Claude API key",
+  openai_api: "OpenAI API key",
+};
 
 // Removed from the CLI's environment so it uses the subscription login, not an
 // API key that would bill a separate account.
@@ -21,8 +29,7 @@ const API_KEY_VARS = {
 
 const CODEX_TOOL_ITEMS = new Set(["command_execution", "file_change", "mcp_tool_call", "web_search", "tool_call"]);
 
-export class ProviderError extends Error {}
-export class ToolAttempt extends ProviderError {}
+export { ProviderError, ToolAttempt };
 
 function cliPath(provider) {
   const env = provider === "claude" ? process.env.BRIDGELIT_CLAUDE_PATH : process.env.BRIDGELIT_CODEX_PATH;
@@ -73,6 +80,16 @@ export function detect() {
     };
   } else {
     out.codex = { installed: false, version: "", ready: false, note: "Not installed." };
+  }
+  const keyed = keyedProviders();
+  for (const provider of Object.keys(API_LABELS)) {
+    const has = keyed.includes(provider);
+    out[provider] = {
+      installed: has,
+      version: has ? "key in keychain" : "",
+      ready: has,
+      note: has ? "" : `No key. Add one with \`bridgelit-connect key add ${provider === "anthropic_api" ? "anthropic" : "openai"}\`.`,
+    };
   }
   return out;
 }
@@ -221,9 +238,14 @@ export function friendlyError(provider, message) {
  *          model?: string, keepApiKeys?: boolean, onPartial?: (text: string) => void,
  *          signal?: AbortSignal}} job
  */
-export function runProvider(job) {
+export async function runProvider(job) {
+  if (job.provider?.endsWith("_api")) return runApiProvider(job);
+  return runCli(job);
+}
+
+function runCli(job) {
   const { provider } = job;
-  if (!PROVIDERS.includes(provider)) return Promise.reject(new ProviderError(`Unknown AI: ${provider}`));
+  if (!CLI_PROVIDERS.includes(provider)) return Promise.reject(new ProviderError(`Unknown AI: ${provider}`));
   const workdir = fs.mkdtempSync(path.join(os.tmpdir(), "bridgelit-"));
   const args = provider === "claude" ? claudeArgs(job) : codexArgs(job);
   const input = provider === "claude" ? job.prompt : `${job.system}\n\n---\n\n${job.prompt}`;

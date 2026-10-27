@@ -1,7 +1,10 @@
 // bridgelit-connect: login | start | status | doctor | logout | service
+import { spawnSync } from "node:child_process";
 import os from "node:os";
+import readline from "node:readline";
 import { setTimeout as wait } from "node:timers/promises";
 import { Api, ApiError } from "./api.js";
+import { API_LABELS, apiProviderFor, checkKey, keyedProviders, looksLikeKey, removeKey, saveKey } from "./apikeys.js";
 import { RevokedError, runAgent } from "./agent.js";
 import { VERSION, clearConfig, connectPages, normalizeServer, readConfig, writeConfig } from "./config.js";
 import { deleteToken, loadToken, saveToken } from "./credentials.js";
@@ -19,6 +22,9 @@ Usage:
   bridgelit-connect doctor                               check Claude / Codex are ready
   bridgelit-connect logout                               disconnect this computer
   bridgelit-connect service install|uninstall            start automatically at login
+  bridgelit-connect setup claude|chatgpt                 install Claude Code or Codex and sign in
+  bridgelit-connect key add|remove anthropic|openai      use your own API key (kept in your keychain)
+  bridgelit-connect key list                             show which API keys are stored
 
 Options:
   --server URL        BridgeLit server (default https://bridgelit.net, or BRIDGELIT_SERVER)
@@ -26,6 +32,8 @@ Options:
   --approve           ask before answering each question (terminal only)
   --claude-model M    model for Claude, e.g. sonnet (default: Claude Code's default)
   --codex-model M     model for Codex (default: Codex's default)
+  --anthropic-model M model for your Claude API key (default: claude-opus-5-5)
+  --openai-model M    model for your OpenAI API key (default: gpt-5.5)
   --use-api-keys      let the CLIs use ANTHROPIC_API_KEY / OPENAI_API_KEY if set
                       (by default they are hidden so your subscription login is used)
 `;
@@ -119,6 +127,8 @@ async function start(args) {
       ...(current.config.models ?? {}),
       ...(args["claude-model"] ? { claude: args["claude-model"] } : {}),
       ...(args["codex-model"] ? { codex: args["codex-model"] } : {}),
+      ...(args["anthropic-model"] ? { anthropic_api: args["anthropic-model"] } : {}),
+      ...(args["openai-model"] ? { openai_api: args["openai-model"] } : {}),
     },
   };
   const controller = new AbortController();
@@ -166,10 +176,10 @@ function doctor() {
   console.log(`Node.js ${process.versions.node} ${major >= 20 ? "ok" : "- needs 20 or newer"}`);
   const found = detect();
   for (const [provider, f] of Object.entries(found)) {
-    console.log(`${LABELS[provider]}: ${f.ready ? `ready (${f.version})` : f.installed ? `installed, not ready - ${f.note}` : "not installed"}`);
+    console.log(`${LABELS[provider]}: ${f.ready ? `ready (${f.version})` : f.installed ? `installed, not ready - ${f.note}` : provider.endsWith("_api") ? f.note : "not installed"}`);
   }
-  if (!found.claude.installed) console.log("  Install Claude Code: npm install -g @anthropic-ai/claude-code, then run `claude` and /login with your Claude plan.");
-  if (!found.codex.installed) console.log("  Install Codex: npm install -g @openai/codex, then `codex login` with your ChatGPT plan.");
+  if (!found.claude.installed) console.log("  Set up Claude (no API key): bridgelit-connect setup claude");
+  if (!found.codex.installed) console.log("  Set up ChatGPT (no API key): bridgelit-connect setup chatgpt");
   if (process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY) {
     console.log("Note: an API key is set in your shell. BridgeLit Connect hides it from the CLIs so your subscription is used (pass --use-api-keys to change that).");
   }
@@ -185,6 +195,84 @@ async function logout() {
   if (config.server) deleteToken(config.server, config.store);
   clearConfig();
   console.log("Disconnected. The token was removed from this computer.");
+  return 0;
+}
+
+/** Read a secret without echoing it (or from stdin when piped). */
+function readSecret(prompt) {
+  if (!process.stdin.isTTY) {
+    return new Promise((resolve) => {
+      let data = "";
+      process.stdin.setEncoding("utf8");
+      process.stdin.on("data", (chunk) => (data += chunk));
+      process.stdin.on("end", () => resolve(data.trim()));
+    });
+  }
+  return new Promise((resolve) => {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: true });
+    process.stdout.write(prompt);
+    rl._writeToOutput = () => undefined; // hide what is typed or pasted
+    rl.question("", (answer) => {
+      rl.close();
+      process.stdout.write("\n");
+      resolve(answer.trim());
+    });
+  });
+}
+
+async function keyCommand(sub, name) {
+  if (sub === "list") {
+    const keyed = keyedProviders();
+    for (const provider of Object.keys(API_LABELS)) {
+      console.log(`${API_LABELS[provider]}: ${keyed.includes(provider) ? "stored in your keychain" : "none"}`);
+    }
+    return 0;
+  }
+  const provider = apiProviderFor(name);
+  if (!provider || !["add", "remove"].includes(sub)) {
+    throw new Error("Use `key add anthropic`, `key add openai`, `key remove …` or `key list`.");
+  }
+  if (sub === "remove") {
+    removeKey(provider);
+    console.log(`${API_LABELS[provider]} removed from this computer.`);
+    return 0;
+  }
+  const key = await readSecret(`Paste your ${API_LABELS[provider]} (it stays on this computer): `);
+  if (!looksLikeKey(provider, key)) {
+    throw new Error(`That doesn't look like an ${provider === "anthropic_api" ? "Anthropic (sk-ant-…)" : "OpenAI (sk-…)"} key.`);
+  }
+  process.stdout.write("Checking the key… ");
+  const problem = await checkKey(provider, key);
+  if (problem) {
+    console.log("failed.");
+    throw new Error(problem);
+  }
+  const store = saveKey(provider, key);
+  console.log(`ok. Saved in: ${store}.`);
+  console.log("Restart `bridgelit-connect start` (or the service) so BridgeLit offers it.");
+  return 0;
+}
+
+const SETUP = {
+  claude: { label: "Claude Code", pkg: "@anthropic-ai/claude-code", login: ["claude", ["auth", "login"]] },
+  chatgpt: { label: "Codex (ChatGPT)", pkg: "@openai/codex", login: ["codex", ["login"]] },
+};
+
+/** Install Claude Code or Codex and open its sign-in, so the user's plan can be used. */
+function setup(name) {
+  const what = SETUP[name === "codex" ? "chatgpt" : name];
+  if (!what) throw new Error("Use `setup claude` or `setup chatgpt`.");
+  const shell = process.platform === "win32";
+  const installed = spawnSync(what.login[0], ["--version"], { shell, encoding: "utf8" }).status === 0;
+  if (!installed) {
+    console.log(`Installing ${what.label}: npm install -g ${what.pkg}`);
+    const r = spawnSync("npm", ["install", "-g", what.pkg], { stdio: "inherit", shell });
+    if (r.status !== 0) throw new Error(`Install failed. Run it yourself: npm install -g ${what.pkg}`);
+  }
+  console.log(`Signing in to ${what.label}. Choose your ${name === "claude" ? "Claude" : "ChatGPT"} account, not an API key.`);
+  const r = spawnSync(what.login[0], what.login[1], { stdio: "inherit", shell });
+  if (r.status !== 0) throw new Error(`Sign-in didn't finish. Run \`${what.login[0]} ${what.login[1].join(" ")}\` yourself.`);
+  console.log("Done. Check with `bridgelit-connect doctor`.");
   return 0;
 }
 
@@ -210,6 +298,10 @@ export async function main(argv) {
       return doctor();
     case "logout":
       return logout();
+    case "key":
+      return keyCommand(sub, args._[2]);
+    case "setup":
+      return setup(sub);
     case "service":
       if (sub === "install") installService(console.log);
       else if (sub === "uninstall") uninstallService(console.log);

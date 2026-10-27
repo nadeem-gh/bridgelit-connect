@@ -136,7 +136,7 @@ export async function runAgent(api, options, log, signal) {
 
   for (const p of Object.keys(found)) {
     const f = found[p];
-    log(`${LABELS[p]}: ${f.ready ? `ready (${f.version})` : f.installed ? `not ready - ${f.note}` : "not installed"}`);
+    log(`${LABELS[p]}: ${f.ready ? `ready (${f.version})` : f.installed ? `not ready - ${f.note}` : p.endsWith("_api") ? f.note : "not installed"}`);
   }
   if (providers.length === 0) {
     log("No AI is ready on this computer. Run `bridgelit-connect doctor` for help.");
