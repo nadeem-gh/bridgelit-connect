@@ -108,7 +108,7 @@ export function readyProviders(found = detect()) {
   return PROVIDERS.filter((p) => found[p]?.ready);
 }
 
-function cleanEnv(provider, keepApiKeys) {
+export function cleanEnv(provider, keepApiKeys) {
   const env = { ...process.env };
   if (!keepApiKeys) for (const name of API_KEY_VARS[provider]) delete env[name];
   env.CI = "true";

@@ -73,6 +73,22 @@ Environment: `BRIDGELIT_ANTHROPIC_BASE_URL` / `BRIDGELIT_OPENAI_BASE_URL` (proxi
 `BRIDGELIT_CODEX_PATH`, `BRIDGELIT_CONNECT_HOME` (config folder),
 `BRIDGELIT_CREDENTIAL_STORE=file` (skip the OS keychain on headless machines).
 
+## Pictures
+
+ChatGPT (Codex) and an OpenAI API key can also make pictures: a reader's
+picture from a prompt, or an author's picture for a paragraph of their draft.
+They can also enhance a picture already on a draft. Claude can't make pictures.
+
+- **Codex** uses its built-in image tool with your ChatGPT plan. It is on by
+  default; if it is off, run `codex features enable image_generation`. Codex
+  saves each picture under `~/.codex/generated_images/`, and the agent sends
+  that picture back.
+- **OpenAI API key** uses the images API (`gpt-image-1` unless you pass
+  `--openai-image-model`). This is billed to your OpenAI account.
+
+The agent tells BridgeLit which AIs can make pictures. Versions before 0.2.0
+can't, so update with `npm i -g bridgelit-connect`.
+
 ## How it works
 
 1. `login` asks the server for a one-time code, which you approve while signed in to BridgeLit. The
