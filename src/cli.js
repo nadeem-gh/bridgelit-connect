@@ -31,6 +31,7 @@ Options:
   --server URL        BridgeLit server (default https://bridgelit.net, or BRIDGELIT_SERVER)
   --name NAME         how this computer is listed in BridgeLit (default: its host name)
   --approve           ask before answering each question (terminal only)
+  --parallel N        answer up to N questions at once (default: BridgeLit's limit, 3)
   --claude-model M    model for Claude, e.g. sonnet (default: Claude Code's default)
   --codex-model M     model for Codex (default: Codex's default)
   --anthropic-model M model for your Claude API key (default: claude-opus-5-5)
@@ -133,6 +134,8 @@ async function start(args) {
       ...(args["openai-model"] ? { openai_api: args["openai-model"] } : {}),
     },
     imageModel: args["openai-image-model"] ?? current.config.image_model,
+    // Jobs at once (default: what BridgeLit allows, 3); 1 runs them one by one.
+    parallel: Number(args.parallel ?? current.config.parallel) || undefined,
   };
   const controller = new AbortController();
   const stop = () => {
