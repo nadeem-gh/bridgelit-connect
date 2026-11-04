@@ -12,6 +12,18 @@ const HELLO_EVERY_MS = 60_000;
 const DETECT_EVERY_MS = 5 * 60_000;
 const PARTIAL_EVERY_MS = 700;
 const MAX_BACKOFF_MS = 60_000;
+// While every local slot is busy, say hello this often so the computer stays online.
+const BUSY_HELLO_MS = 20_000;
+// A CLI's refusal of a model the server suggested (the user's plan doesn't offer it).
+const MODEL_REFUSED = /model[^\n]{0,80}(not found|not supported|unknown|invalid|does not exist|not available|isn't available)|model_not_found/i;
+
+/** Jobs to run at once: the server's limit, lowered by ``--parallel``; one with --approve. */
+export function parallelLimit(serverMax, options = {}) {
+  if (options.approve) return 1;
+  const server = Math.max(1, Number(serverMax) || 1);
+  const local = Number(options.parallel);
+  return local > 0 ? Math.min(server, Math.floor(local)) : server;
+}
 
 export const sleep = (ms, signal) =>
   new Promise((resolve) => {
@@ -92,7 +104,7 @@ export async function handleImageJob(api, job, options, log, run = runImage) {
  * Run one job end to end; never throws for job failures (they are reported).
  * @param {import("./api.js").Api} api
  */
-export async function handleJob(api, job, options, log, run = runProvider) {
+export async function handleJob(api, job, options, log, run = options?.run ?? runProvider) {
   const started = Date.now();
   log(`Answering with ${LABELS[job.provider] ?? job.provider}: "${lastQuestion(job.prompt).slice(0, 80)}"`);
   if (options.approve && !(await confirm(job))) {
@@ -128,18 +140,31 @@ export async function handleJob(api, job, options, log, run = runProvider) {
     }
   };
 
-  let body;
-  try {
-    const answer = await run({
+  // A model set in Connect wins; else the one BridgeLit's own CLI uses (job.model).
+  const own = options.models?.[job.provider];
+  const suggested = own ? "" : String(job.model ?? "");
+  const runWith = (model) =>
+    run({
       provider: job.provider,
       system: job.system,
       prompt: job.prompt,
       timeoutMs: Math.max(10, Number(job.timeout_seconds) || 240) * 1000,
-      model: options.models?.[job.provider],
+      model,
       keepApiKeys: options.keepApiKeys,
       onPartial,
       signal: stop.signal,
     });
+
+  let body;
+  try {
+    let answer;
+    try {
+      answer = await runWith(own || suggested || undefined);
+    } catch (error) {
+      if (!(suggested && error instanceof ProviderError && MODEL_REFUSED.test(error.message))) throw error;
+      log(`${suggested} isn't on this plan; using ${LABELS[job.provider] ?? job.provider}'s default model.`);
+      answer = await runWith(undefined);
+    }
     const reason = privateDataReason(answer);
     body = reason
       ? { error: `Answer withheld on the computer: ${reason}.` }
@@ -174,6 +199,7 @@ export async function runAgent(api, options, log, signal) {
   let lastHello = 0;
   let lastDetect = Date.now();
   let failures = 0;
+  let firstHello = true;
   const info = () => ({
     providers,
     image_providers: imageProviders(providers),
@@ -190,8 +216,30 @@ export async function runAgent(api, options, log, signal) {
     log("No AI is ready on this computer. Run `bridgelit-connect doctor` for help.");
   }
 
+  // Jobs running now; up to ``parallelLimit`` at once (the server never hands more).
+  const inflight = new Set();
+  let serverMax = 1;
+  const startJob = (job) => {
+    const handler = job.kind === "image" ? handleImageJob : handleJob;
+    const task = handler(api, job, options, log)
+      .catch((error) => log(`Couldn't send the answer back (${error.message}).`))
+      .finally(() => inflight.delete(task));
+    inflight.add(task);
+  };
+
   while (!signal.aborted) {
     try {
+      if (inflight.size >= parallelLimit(serverMax, options)) {
+        const timedOut = await Promise.race([
+          Promise.race(inflight).then(() => false),
+          sleep(BUSY_HELLO_MS, signal).then(() => true),
+        ]);
+        if (timedOut && !signal.aborted) {
+          await api.hello(info());
+          lastHello = Date.now();
+        }
+        continue;
+      }
       if (Date.now() - lastDetect > DETECT_EVERY_MS) {
         found = detect();
         providers = readyProviders(found);
@@ -199,16 +247,20 @@ export async function runAgent(api, options, log, signal) {
         lastHello = 0;
       }
       if (Date.now() - lastHello > HELLO_EVERY_MS) {
-        await api.hello(info());
+        // The first hello tells BridgeLit this process just started, so jobs a
+        // previous run left half done free their slots now.
+        await api.hello(firstHello ? { ...info(), started: true } : info());
+        firstHello = false;
         if (lastHello === 0 && failures === 0) log("Connected. Waiting for questions from BridgeLit… (Ctrl+C to stop)");
         lastHello = Date.now();
       }
       const { data } = await api.nextJob();
       if (failures > 0) log("Reconnected.");
       failures = 0;
+      // Servers before parallel jobs send no limit: one at a time, as before.
+      serverMax = Number(data?.max_parallel) || 1;
       if (data?.job) {
-        if (data.job.kind === "image") await handleImageJob(api, data.job, options, log);
-        else await handleJob(api, data.job, options, log);
+        startJob(data.job);
         continue;
       }
       await sleep(Math.max(1000, Number(data?.next_poll_ms) || 2000), signal);
@@ -224,4 +276,5 @@ export async function runAgent(api, options, log, signal) {
       await sleep(wait, signal);
     }
   }
+  await Promise.allSettled(inflight);
 }

@@ -53,3 +53,95 @@ test("CLI failures are passed on", async () => {
   });
   assert.equal(api.calls.at(-1)[2].error, "Claude isn't signed in on this computer.");
 });
+
+import { parallelLimit, runAgent } from "../src/agent.js";
+
+test("parallel limit: server limit, lowered by --parallel, one with --approve", () => {
+  assert.equal(parallelLimit(undefined), 1);
+  assert.equal(parallelLimit(3), 3);
+  assert.equal(parallelLimit(3, { parallel: 2 }), 2);
+  assert.equal(parallelLimit(3, { parallel: 9 }), 3);
+  assert.equal(parallelLimit(3, { approve: true }), 1);
+});
+
+test("uses the server's suggested model when none is set", async () => {
+  const api = fakeApi();
+  let used;
+  await handleJob(api, { ...job, provider: "codex", model: "gpt-5.6-luna" }, {}, quiet, async ({ model }) => {
+    used = model;
+    return "ok";
+  });
+  assert.equal(used, "gpt-5.6-luna");
+});
+
+test("a model set in Connect wins over the suggestion", async () => {
+  const api = fakeApi();
+  let used;
+  await handleJob(
+    api,
+    { ...job, provider: "codex", model: "gpt-5.6-luna" },
+    { models: { codex: "gpt-6.1-terra" } },
+    quiet,
+    async ({ model }) => {
+      used = model;
+      return "ok";
+    },
+  );
+  assert.equal(used, "gpt-6.1-terra");
+});
+
+test("a suggested model the plan refuses falls back to the CLI default", async () => {
+  const api = fakeApi();
+  const models = [];
+  await handleJob(api, { ...job, provider: "codex", model: "gpt-x" }, {}, quiet, async ({ model }) => {
+    models.push(model);
+    if (model) throw new ProviderError("model_not_found: The model gpt-x does not exist");
+    return "ok";
+  });
+  assert.deepEqual(models, ["gpt-x", undefined]);
+  assert.deepEqual(api.calls.at(-1), ["result", 7, { answer: "ok" }]);
+});
+
+test("runs jobs in parallel up to the server's limit", async () => {
+  const queue = [1, 2, 3, 4].map((id) => ({ ...job, id }));
+  let running = 0;
+  let peak = 0;
+  const controller = new AbortController();
+  const api = {
+    hello: async () => ({ data: {} }),
+    progress: async () => ({ data: { keep_going: true } }),
+    result: async () => {
+      if (queue.length === 0 && running === 0) controller.abort();
+      return { data: { ok: true } };
+    },
+    nextJob: async () => ({ data: { job: queue.shift() ?? null, max_parallel: 3, next_poll_ms: 1000 } }),
+  };
+  const options = {
+    run: async () => {
+      running += 1;
+      peak = Math.max(peak, running);
+      await new Promise((r) => setTimeout(r, 30));
+      running -= 1;
+      return "ok";
+    },
+  };
+  await runAgent(api, options, quiet, controller.signal);
+  assert.equal(peak, 3);
+});
+
+test("the first hello says the agent just started", async () => {
+  const hellos = [];
+  const controller = new AbortController();
+  const api = {
+    hello: async (body) => {
+      hellos.push(body);
+      return { data: {} };
+    },
+    nextJob: async () => {
+      controller.abort();
+      return { data: { job: null } };
+    },
+  };
+  await runAgent(api, {}, quiet, controller.signal);
+  assert.equal(hellos[0].started, true);
+});
