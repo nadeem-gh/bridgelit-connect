@@ -87,7 +87,7 @@ They can also enhance a picture already on a draft. Claude can't make pictures.
   `--openai-image-model`). This is billed to your OpenAI account.
 
 The agent tells BridgeLit which AIs can make pictures. Versions before 0.2.0
-can't, so update with `npm i -g bridgelit-connect`.
+can't, so reinstall with `npm install -g github:nadeem-gh/bridgelit-connect`.
 
 ## How it works
 
