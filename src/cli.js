@@ -13,7 +13,8 @@ import { installService, uninstallService } from "./service.js";
 
 const HELP = `bridgelit-connect ${VERSION}
 Answer questions you ask on BridgeLit with your own Claude or ChatGPT
-subscription, on this computer.
+subscription, on this computer. ChatGPT (Codex) and an OpenAI API key can
+also make and enhance pictures for your books.
 
 Usage:
   bridgelit-connect login [--server URL] [--name NAME]   connect this computer to your account
@@ -34,6 +35,7 @@ Options:
   --codex-model M     model for Codex (default: Codex's default)
   --anthropic-model M model for your Claude API key (default: claude-opus-5-5)
   --openai-model M    model for your OpenAI API key (default: gpt-5.5)
+  --openai-image-model M  picture model for your OpenAI API key (default: gpt-image-1)
   --use-api-keys      let the CLIs use ANTHROPIC_API_KEY / OPENAI_API_KEY if set
                       (by default they are hidden so your subscription login is used)
 `;
@@ -130,6 +132,7 @@ async function start(args) {
       ...(args["anthropic-model"] ? { anthropic_api: args["anthropic-model"] } : {}),
       ...(args["openai-model"] ? { openai_api: args["openai-model"] } : {}),
     },
+    imageModel: args["openai-image-model"] ?? current.config.image_model,
   };
   const controller = new AbortController();
   const stop = () => {

@@ -5,7 +5,8 @@ import readline from "node:readline/promises";
 import { ApiError } from "./api.js";
 import { VERSION } from "./config.js";
 import { privateDataReason } from "./guard.js";
-import { LABELS, ProviderError, ToolAttempt, detect, readyProviders, runProvider } from "./providers.js";
+import { IMAGE_PROVIDERS, runImage } from "./images.js";
+import { LABELS, ProviderError, ToolAttempt, cleanEnv, detect, readyProviders, runProvider } from "./providers.js";
 
 const HELLO_EVERY_MS = 60_000;
 const DETECT_EVERY_MS = 5 * 60_000;
@@ -44,6 +45,47 @@ async function confirm(job) {
   } finally {
     rl.close();
   }
+}
+
+/** The ready AIs that can also make pictures. */
+export function imageProviders(providers) {
+  return providers.filter((p) => IMAGE_PROVIDERS.includes(p));
+}
+
+/** Make one picture and send it back; never throws for job failures. */
+export async function handleImageJob(api, job, options, log, run = runImage) {
+  const started = Date.now();
+  const what = job.input_image_b64 ? "Enhancing a picture" : "Making a picture";
+  log(`${what} with ${LABELS[job.provider] ?? job.provider}: "${job.prompt.slice(0, 80)}"`);
+  if (options.approve && !(await confirm({ ...job, prompt: `Picture: ${job.prompt}` }))) {
+    await api.result(job.id, { error: "Declined on the computer." }).catch(() => undefined);
+    log("Declined.");
+    return;
+  }
+  let body;
+  try {
+    const image = await run(
+      {
+        provider: job.provider,
+        prompt: job.prompt,
+        input_image_b64: job.input_image_b64,
+        timeoutMs: Math.max(30, Number(job.timeout_seconds) || 360) * 1000,
+        model: options.models?.[job.provider],
+        imageModel: options.imageModel,
+      },
+      job.provider === "codex" ? { codex: { env: cleanEnv("codex", options.keepApiKeys) } } : {},
+    );
+    body = { image_b64: image };
+  } catch (error) {
+    body = { error: error instanceof ProviderError ? error.message : "Something went wrong on the computer." };
+  }
+  try {
+    await api.result(job.id, body);
+  } catch (error) {
+    if (!(error instanceof ApiError && error.status === 409)) throw error;
+  }
+  const seconds = ((Date.now() - started) / 1000).toFixed(1);
+  log(body.image_b64 ? `Picture sent in ${seconds}s.` : `No picture: ${body.error}`);
 }
 
 /**
@@ -132,7 +174,13 @@ export async function runAgent(api, options, log, signal) {
   let lastHello = 0;
   let lastDetect = Date.now();
   let failures = 0;
-  const info = () => ({ providers, agent_version: VERSION, platform: `${process.platform}-${process.arch}`, name: os.hostname() });
+  const info = () => ({
+    providers,
+    image_providers: imageProviders(providers),
+    agent_version: VERSION,
+    platform: `${process.platform}-${process.arch}`,
+    name: os.hostname(),
+  });
 
   for (const p of Object.keys(found)) {
     const f = found[p];
@@ -159,7 +207,8 @@ export async function runAgent(api, options, log, signal) {
       if (failures > 0) log("Reconnected.");
       failures = 0;
       if (data?.job) {
-        await handleJob(api, data.job, options, log);
+        if (data.job.kind === "image") await handleImageJob(api, data.job, options, log);
+        else await handleJob(api, data.job, options, log);
         continue;
       }
       await sleep(Math.max(1000, Number(data?.next_poll_ms) || 2000), signal);
