@@ -18,6 +18,7 @@ also make and enhance pictures for your books.
 
 Usage:
   bridgelit-connect login [--server URL] [--name NAME]   connect this computer to your account
+  bridgelit-connect login --token CODE                   connect with the code in a BridgeLit install line
   bridgelit-connect start [--approve]                    stay connected and answer questions
   bridgelit-connect status                               show the connection
   bridgelit-connect doctor                               check Claude / Codex are ready
@@ -65,8 +66,53 @@ function session() {
   return token ? { config, api: new Api(config.server, token) } : null;
 }
 
+/** Keep the device token from an approved login, replacing this computer's old one. */
+async function saveLogin(server, data) {
+  const old = readConfig();
+  if (old.server) {
+    // Re-running the install replaces this computer instead of listing it twice.
+    const oldToken = loadToken(old.server, old.store);
+    if (oldToken) await new Api(old.server, oldToken).logout().catch(() => undefined);
+    deleteToken(old.server, old.store);
+  }
+  const store = saveToken(server, data.token);
+  writeConfig({ ...old, server, device_id: data.device.id, device_name: data.device.name, store });
+  return store;
+}
+
+/** The one-line install: the portal already approved this login; one poll finishes it. */
+async function loginWithToken(server, deviceCode, args) {
+  const api = new Api(server);
+  const info = {
+    name: args.name ?? os.hostname().replace(/\.(local|lan|home)$/i, ""),
+    providers: readyProviders(),
+    agent_version: VERSION,
+    platform: `${process.platform}-${process.arch}`,
+  };
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    let result;
+    try {
+      result = await api.pollPairing(deviceCode, info);
+    } catch (error) {
+      if (error instanceof ApiError && error.status < 500) throw error;
+      await wait(2000);
+      continue;
+    }
+    if (result.status === 200 && result.data.token) {
+      await saveLogin(server, result.data);
+      console.log(`  Connected as "${result.data.device.name}".`);
+      return 0;
+    }
+    if (result.status === 410) break;
+    await wait(2000);
+  }
+  throw new Error("This install line has expired or was already used. Reload the BridgeLit page for a new one.");
+}
+
 async function login(args) {
   const server = normalizeServer(args.server ?? process.env.BRIDGELIT_SERVER ?? readConfig().server);
+  const token = args.token ?? process.env.BRIDGELIT_PAIR_TOKEN;
+  if (typeof token === "string" && token.trim()) return loginWithToken(server, token.trim(), args);
   const found = detect();
   const providers = readyProviders(found);
   if (providers.length === 0) {
@@ -102,10 +148,7 @@ async function login(args) {
     }
     if (result.status === 410) throw new Error(result.data.detail ?? "The code expired. Run login again.");
     if (result.status === 200 && result.data.token) {
-      const old = readConfig();
-      if (old.server) deleteToken(old.server, old.store);
-      const store = saveToken(server, result.data.token);
-      writeConfig({ ...old, server, device_id: result.data.device.id, device_name: result.data.device.name, store });
+      const store = await saveLogin(server, result.data);
       console.log(`
   Connected as "${result.data.device.name}". Token saved in: ${store}.
 
