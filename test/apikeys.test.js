@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import http from "node:http";
 import { after, before, test } from "node:test";
-import { apiProviderFor, looksLikeKey, runApiProvider } from "../src/apikeys.js";
-import { ProviderError } from "../src/errors.js";
+import { apiProviderFor, looksLikeKey, retryAfterSeconds, runApiProvider } from "../src/apikeys.js";
+import { ProviderError, RateLimited } from "../src/errors.js";
 
 let server;
 let seen = [];
@@ -22,6 +22,16 @@ before(async () => {
       if (sent === "sk-ant-bad" || sent === "sk-bad") {
         res.writeHead(401, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ type: "error", error: { type: "authentication_error", message: "invalid x-api-key" } }));
+        return;
+      }
+      if (sent === "sk-ant-slowdown") {
+        res.writeHead(429, { "Content-Type": "application/json", "retry-after": "0" });
+        res.end(JSON.stringify({ type: "error", error: { type: "rate_limit_error", message: "slow down" } }));
+        return;
+      }
+      if (sent === "sk-nocredit-0000000000000000000") {
+        res.writeHead(429, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: { message: "quota", type: "insufficient_quota", code: "insufficient_quota" } }));
         return;
       }
       if (req.url.startsWith("/v1/messages")) {
@@ -89,4 +99,23 @@ test("bad key and missing key give clear errors", async () => {
   await assert.rejects(runApiProvider(job("anthropic_api"), () => "sk-ant-bad"), (e) => e instanceof ProviderError && /rejected/.test(e.message));
   await assert.rejects(runApiProvider(job("openai_api"), () => "sk-bad"), /rejected/);
   await assert.rejects(runApiProvider(job("openai_api"), () => null), /No OpenAI API key/);
+});
+
+test("a rate limit is RateLimited with the wait; no credit is a plain error", async () => {
+  await assert.rejects(
+    runApiProvider(job("anthropic_api"), () => "sk-ant-slowdown"),
+    (e) => e instanceof RateLimited && e.retryAfter === 0 && /rate limit/.test(e.message),
+  );
+  await assert.rejects(
+    runApiProvider(job("openai_api"), () => "sk-nocredit-0000000000000000000"),
+    (e) => e instanceof ProviderError && !(e instanceof RateLimited) && /out of credit/.test(e.message),
+  );
+});
+
+test("retry-after: seconds, milliseconds, a date, or 30 by default", () => {
+  assert.equal(retryAfterSeconds({ headers: { "retry-after": "12" } }), 12);
+  assert.equal(retryAfterSeconds({ headers: new Headers({ "retry-after-ms": "1500" }) }), 2);
+  const now = Date.parse("2026-11-05T10:00:00Z");
+  assert.equal(retryAfterSeconds({ headers: { "retry-after": "Thu, 05 Nov 2026 10:00:45 GMT" } }, now), 45);
+  assert.equal(retryAfterSeconds({}), 30);
 });

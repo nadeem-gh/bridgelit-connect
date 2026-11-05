@@ -5,7 +5,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { deleteToken, loadToken, saveToken } from "./credentials.js";
 import { readConfig, writeConfig } from "./config.js";
-import { ProviderError } from "./errors.js";
+import { ProviderError, RateLimited } from "./errors.js";
 
 export const API_PROVIDERS = ["anthropic_api", "openai_api"];
 export const API_LABELS = { anthropic_api: "Claude API key", openai_api: "OpenAI API key" };
@@ -84,13 +84,38 @@ export function keyError(provider, error) {
   if (error instanceof Anthropic.NotFoundError || error instanceof OpenAI.NotFoundError) {
     return `That model isn't available to your ${label}. Pick another with --${provider === "anthropic_api" ? "anthropic" : "openai"}-model.`;
   }
+  if (outOfCredit(error)) {
+    return `Your ${label} has run out of credit. Add credit with ${provider === "anthropic_api" ? "Anthropic" : "OpenAI"}, then resume.`;
+  }
   if (error instanceof Anthropic.RateLimitError || error instanceof OpenAI.RateLimitError) {
-    return `Your ${label} hit its rate or spending limit. Try again later.`;
+    return `Your ${label} hit its rate limit.`;
   }
   if (error instanceof Anthropic.APIConnectionError || error instanceof OpenAI.APIConnectionError) {
     return `Couldn't reach ${provider === "anthropic_api" ? "Anthropic" : "OpenAI"} from this computer.`;
   }
   return String(error?.message ?? error).slice(0, 280);
+}
+
+const DEFAULT_RETRY_AFTER = 30;
+
+/** A 429 that waiting won't fix: the account has no credit or quota left. */
+export function outOfCredit(error) {
+  return error instanceof OpenAI.RateLimitError && error.code === "insufficient_quota";
+}
+
+/** Seconds the provider asked us to wait (``retry-after`` / ``retry-after-ms``), else 30. */
+export function retryAfterSeconds(error, now = Date.now()) {
+  const headers = error?.headers;
+  const read = (name) =>
+    typeof headers?.get === "function" ? headers.get(name) : headers?.[name] ?? headers?.[name.toLowerCase()];
+  const ms = Number(read("retry-after-ms"));
+  if (ms > 0) return Math.ceil(ms / 1000);
+  const raw = read("retry-after");
+  if (raw == null || raw === "") return DEFAULT_RETRY_AFTER;
+  const secs = Number(raw);
+  if (Number.isFinite(secs) && secs >= 0) return Math.ceil(secs);
+  const at = Date.parse(raw);
+  return Number.isFinite(at) ? Math.max(1, Math.ceil((at - now) / 1000)) : DEFAULT_RETRY_AFTER;
 }
 
 async function runAnthropic({ key, model, system, prompt, onPartial, signal }) {
@@ -168,6 +193,12 @@ export async function runApiProvider(job, keyFor = storedKey) {
     if (error instanceof ProviderError) throw error;
     if (signal.aborted) {
       throw new ProviderError(job.signal?.aborted ? "Stopped." : "The AI took too long and was stopped.");
+    }
+    if (
+      !outOfCredit(error) &&
+      (error instanceof Anthropic.RateLimitError || error instanceof OpenAI.RateLimitError)
+    ) {
+      throw new RateLimited(keyError(job.provider, error), retryAfterSeconds(error));
     }
     throw new ProviderError(keyError(job.provider, error));
   }
