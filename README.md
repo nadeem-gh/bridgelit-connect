@@ -58,7 +58,7 @@ On Windows, create a Task Scheduler task "At log on" that runs `bridgelit-connec
 | Command | What it does |
 |---------|--------------|
 | `login [--server URL] [--name NAME]` | Connects this computer (device-code login). |
-| `start [--approve] [--parallel N] [--claude-model M] [--codex-model M]` | Stays connected and answers questions, up to 3 at once (BridgeLit's limit; `--parallel 1` answers one by one). `--approve` asks y/N in the terminal first and answers one at a time. Book translation uses the model BridgeLit's own Codex / Claude uses, unless you set one; a model your plan doesn't offer falls back to the CLI's default. |
+| `start [--approve] [--parallel N] [--claude-model M] [--codex-model M]` | Stays connected and answers questions: up to 3 at once with the Claude / Codex apps and, separately, up to 8 with your own API keys (BridgeLit's limits; `--parallel 1` answers one by one). When an API key hits its rate limit, Connect waits as the provider asks (up to a minute, twice) and otherwise hands the question back to BridgeLit to send again later, so nothing fails for it; a key with no credit left says so. `--approve` asks y/N in the terminal first and answers one at a time. Book translation uses the model BridgeLit's own Codex / Claude uses, unless you set one; a model your plan doesn't offer falls back to the CLI's default. |
 | `status` | Shows the server, this computer, and the AIs it offers. |
 | `doctor` | Checks Node, Claude Code and Codex are installed and signed in. |
 | `logout` | Disconnects this computer and deletes its token. |

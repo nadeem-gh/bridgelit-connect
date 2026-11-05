@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { handleJob } from "../src/agent.js";
 import { ProviderError, ToolAttempt } from "../src/providers.js";
+import { RateLimited } from "../src/errors.js";
 
 function fakeApi() {
   const calls = [];
@@ -144,4 +145,29 @@ test("the first hello says the agent just started", async () => {
   };
   await runAgent(api, {}, quiet, controller.signal);
   assert.equal(hellos[0].started, true);
+});
+
+test("a short rate limit is waited out on the computer", async () => {
+  const api = fakeApi();
+  let tries = 0;
+  await handleJob(api, job, {}, quiet, async () => {
+    tries += 1;
+    if (tries < 3) throw new RateLimited("Your Claude API key hit its rate limit.", 0);
+    return "ok";
+  });
+  assert.equal(tries, 3);
+  assert.deepEqual(api.calls.find((c) => c[0] === "result")[2], { answer: "ok" });
+});
+
+test("a long rate limit goes back to BridgeLit with retry_after, not as a failure", async () => {
+  const api = fakeApi();
+  let tries = 0;
+  await handleJob(api, job, {}, quiet, async () => {
+    tries += 1;
+    throw new RateLimited("Your OpenAI API key hit its rate limit.", 120);
+  });
+  assert.equal(tries, 1);
+  const body = api.calls.find((c) => c[0] === "result")[2];
+  assert.equal(body.retry_after, 120);
+  assert.match(body.error, /rate limit/);
 });

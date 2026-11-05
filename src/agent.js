@@ -3,6 +3,7 @@
 import os from "node:os";
 import readline from "node:readline/promises";
 import { ApiError } from "./api.js";
+import { RateLimited } from "./errors.js";
 import { VERSION } from "./config.js";
 import { privateDataReason } from "./guard.js";
 import { IMAGE_PROVIDERS, runImage } from "./images.js";
@@ -15,6 +16,10 @@ const MAX_BACKOFF_MS = 60_000;
 // While every local slot is busy, say hello this often so the computer stays online.
 const BUSY_HELLO_MS = 20_000;
 // A CLI's refusal of a model the server suggested (the user's plan doesn't offer it).
+// A rate-limited API key: wait here this many times (each wait at most
+// LOCAL_WAIT_MAX_S), then hand the job back to BridgeLit to send again later.
+const RATE_RETRIES = 2;
+const LOCAL_WAIT_MAX_S = 60;
 const MODEL_REFUSED = /model[^\n]{0,80}(not found|not supported|unknown|invalid|does not exist|not available|isn't available)|model_not_found/i;
 
 /** Jobs to run at once: the server's limit, lowered by ``--parallel``; one with --approve. */
@@ -155,15 +160,31 @@ export async function handleJob(api, job, options, log, run = options?.run ?? ru
       signal: stop.signal,
     });
 
+  // Waits out a rate limit a few times; a longer or repeated one goes back to BridgeLit.
+  const patient = async (model) => {
+    for (let tries = 0; ; tries += 1) {
+      try {
+        return await runWith(model);
+      } catch (error) {
+        if (!(error instanceof RateLimited) || tries >= RATE_RETRIES || error.retryAfter > LOCAL_WAIT_MAX_S) {
+          throw error;
+        }
+        log(`${error.message} Retrying in ${error.retryAfter}s…`);
+        await sleep(error.retryAfter * 1000, stop.signal);
+        if (stop.signal.aborted) throw error;
+      }
+    }
+  };
+
   let body;
   try {
     let answer;
     try {
-      answer = await runWith(own || suggested || undefined);
+      answer = await patient(own || suggested || undefined);
     } catch (error) {
       if (!(suggested && error instanceof ProviderError && MODEL_REFUSED.test(error.message))) throw error;
       log(`${suggested} isn't on this plan; using ${LABELS[job.provider] ?? job.provider}'s default model.`);
-      answer = await runWith(undefined);
+      answer = await patient(undefined);
     }
     const reason = privateDataReason(answer);
     body = reason
@@ -172,6 +193,9 @@ export async function handleJob(api, job, options, log, run = options?.run ?? ru
   } catch (error) {
     if (stop.signal.aborted && pending && privateDataReason(pending)) {
       body = { error: "Answer withheld on the computer: it looked like private data." };
+    } else if (error instanceof RateLimited) {
+      // Not a failure: BridgeLit queues the job again after ``retry_after``.
+      body = { error: error.message, retry_after: error.retryAfter };
     } else if (error instanceof ToolAttempt) {
       body = { error: `${error.message} The answer was discarded for safety.` };
     } else if (error instanceof ProviderError) {
@@ -186,7 +210,13 @@ export async function handleJob(api, job, options, log, run = options?.run ?? ru
     if (!(error instanceof ApiError && error.status === 409)) throw error;
   }
   const seconds = ((Date.now() - started) / 1000).toFixed(1);
-  log(body.answer ? `Answered in ${seconds}s.` : `Not answered: ${body.error}`);
+  log(
+    body.answer
+      ? `Answered in ${seconds}s.`
+      : body.retry_after
+        ? `${body.error} BridgeLit will send it again in ${body.retry_after}s.`
+        : `Not answered: ${body.error}`,
+  );
 }
 
 /**
