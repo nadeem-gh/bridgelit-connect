@@ -42,8 +42,9 @@ export class Api {
     return this.post("device/pair/", info);
   }
 
-  pollPairing(deviceCode) {
-    return this.post("device/pair/poll/", { device_code: deviceCode });
+  /** @param {string} deviceCode @param {object} [info] who this computer is (used for a portal-started login) */
+  pollPairing(deviceCode, info = {}) {
+    return this.post("device/pair/poll/", { ...info, device_code: deviceCode });
   }
 
   hello(info) {

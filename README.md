@@ -16,6 +16,27 @@ passwords or keys given to BridgeLit.
 
 ## Install
 
+### The easy way: one line
+
+On **Connect your AI** in the BridgeLit reader or author portal, pick Claude or ChatGPT and copy the line
+it shows into Terminal (macOS / Linux) or PowerShell (Windows). The line carries a one-time code (good for
+30 minutes) and runs a short script you can read first at
+[bridgelit.net/api/bridge/connect.sh](https://bridgelit.net/api/bridge/connect.sh) /
+[connect.ps1](https://bridgelit.net/api/bridge/connect.ps1). It:
+
+1. uses your Node.js 20+, or downloads the official one from nodejs.org into `~/.bridgelit/node` and
+   checks its SHA-256;
+2. installs this package into `~/.bridgelit` (no admin password, no `sudo`);
+3. connects the computer with the code (`bridgelit-connect login --token …`);
+4. installs Claude Code or Codex if missing and opens its sign-in;
+5. starts Connect now and at every login (`service install`).
+
+Remove everything again with
+`curl -fsSL https://bridgelit.net/api/bridge/connect.sh | sh -s -- --remove`, or on Windows
+`$env:BRIDGELIT_REMOVE='1'; irm https://bridgelit.net/api/bridge/connect.ps1 | iex`.
+
+### By hand
+
 You need Node.js 20+.
 
 ```bash
@@ -51,13 +72,15 @@ bridgelit-connect service install
 bridgelit-connect service uninstall
 ```
 
-On Windows, create a Task Scheduler task "At log on" that runs `bridgelit-connect start`.
+On Windows, `service install` adds a "BridgeLit Connect" entry to your own Run key (no administrator) that
+starts it hidden at sign-in and restarts it if it stops.
 
 ### Commands
 
 | Command | What it does |
 |---------|--------------|
 | `login [--server URL] [--name NAME]` | Connects this computer (device-code login). |
+| `login --token CODE` | Connects with the one-time code from a portal's install line. |
 | `start [--approve] [--parallel N] [--claude-model M] [--codex-model M]` | Stays connected and answers questions: up to 3 at once with the Claude / Codex apps and, separately, up to 8 with your own API keys (BridgeLit's limits; `--parallel 1` answers one by one). When an API key hits its rate limit, Connect waits as the provider asks (up to a minute, twice) and otherwise hands the question back to BridgeLit to send again later, so nothing fails for it; a key with no credit left says so. `--approve` asks y/N in the terminal first and answers one at a time. Book translation uses the model BridgeLit's own Codex / Claude uses, unless you set one; a model your plan doesn't offer falls back to the CLI's default. |
 | `status` | Shows the server, this computer, and the AIs it offers. |
 | `doctor` | Checks Node, Claude Code and Codex are installed and signed in. |

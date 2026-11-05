@@ -1,6 +1,7 @@
 // Start the agent automatically at login: launchd on macOS, a systemd user
-// unit on Linux. Windows users add a Task Scheduler entry (see README).
-import { spawnSync } from "node:child_process";
+// unit on Linux, and on Windows a hidden PowerShell loop started from the
+// user's own Run key (HKCU, so no administrator is needed).
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -48,12 +49,46 @@ WantedBy=default.target
 `;
 }
 
+const RUN_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+const RUN_NAME = "BridgeLit Connect";
+
+const psQuote = (s) => `'${String(s).replace(/'/g, "''")}'`;
+
+/** The PowerShell that keeps the agent running (restarting it 30 s after it stops). */
+export function windowsLoop({ node, bin, pathEnv, logFile, pidFile }) {
+  return [
+    `Set-Content -LiteralPath ${psQuote(pidFile)} -Value $PID`,
+    `$env:Path = ${psQuote(pathEnv)}`,
+    `while ($true) { & ${psQuote(node)} ${psQuote(bin)} start *>> ${psQuote(logFile)}; Start-Sleep -Seconds 30 }`,
+  ].join("; ");
+}
+
+/** How the Run key starts the loop: Run entries over 260 characters are ignored, so the loop is a file. */
+export function windowsRunArgs({ loopFile }) {
+  return ["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-File", loopFile];
+}
+
+/** Stops the hidden loop (by its PID file) and any agent started with `start`. */
+export function windowsStopScript({ pidFile }) {
+  return [
+    `$f = ${psQuote(pidFile)}`,
+    "if (Test-Path -LiteralPath $f) { Stop-Process -Id ([int](Get-Content -LiteralPath $f)) -Force -ErrorAction SilentlyContinue; Remove-Item -LiteralPath $f -Force }",
+    "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object { $_.CommandLine -like '*bridgelit-connect.js*' -and $_.CommandLine -match '\\sstart(\\s|$)' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }",
+  ].join("; ");
+}
+
+function windowsStop(p) {
+  spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", windowsStopScript(p)], { encoding: "utf8" });
+}
+
 function paths() {
   return {
     node: process.execPath,
     bin: BIN,
     pathEnv: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
     logFile: path.join(configDir(), "connect.log"),
+    pidFile: path.join(configDir(), "connect-loop.pid"),
+    loopFile: path.join(configDir(), "connect-loop.ps1"),
   };
 }
 
@@ -80,7 +115,20 @@ export function installService(log) {
     log("Installed. Logs: journalctl --user -u bridgelit-connect -f");
     return;
   }
-  throw new Error("Automatic start is set up by hand on Windows: see the README (Task Scheduler).");
+  if (process.platform === "win32") {
+    fs.mkdirSync(configDir(), { recursive: true });
+    fs.writeFileSync(p.loopFile, `${windowsLoop(p)}\r\n`);
+    const args = windowsRunArgs(p);
+    const command = ["powershell.exe", ...args.map((a) => (a.includes(" ") ? `"${a}"` : a))].join(" ");
+    const r = spawnSync("reg", ["add", RUN_KEY, "/v", RUN_NAME, "/t", "REG_SZ", "/d", command, "/f"], { encoding: "utf8" });
+    if (r.status !== 0) throw new Error(`Couldn't add the sign-in entry: ${r.stderr || r.stdout}`);
+    windowsStop(p);
+    // Start it now too, without waiting for the next sign-in.
+    spawn("powershell.exe", args, { detached: true, stdio: "ignore", windowsHide: true }).unref();
+    log(`Installed. BridgeLit Connect now starts when you sign in to Windows. Log: ${p.logFile}`);
+    return;
+  }
+  throw new Error(`Automatic start isn't supported on ${process.platform}. Run \`bridgelit-connect start\` instead.`);
 }
 
 export function uninstallService(log) {
@@ -91,6 +139,10 @@ export function uninstallService(log) {
   } else if (process.platform === "linux") {
     spawnSync("systemctl", ["--user", "disable", "--now", "bridgelit-connect.service"]);
     fs.rmSync(path.join(os.homedir(), ".config", "systemd", "user", "bridgelit-connect.service"), { force: true });
+  } else if (process.platform === "win32") {
+    spawnSync("reg", ["delete", RUN_KEY, "/v", RUN_NAME, "/f"], { encoding: "utf8" });
+    windowsStop(paths());
+    fs.rmSync(paths().loopFile, { force: true });
   }
   log("Automatic start removed.");
 }
