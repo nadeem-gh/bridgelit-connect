@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-export const VERSION = "0.5.0";
+export const VERSION = "0.6.0";
 export const DEFAULT_SERVER = "https://bridgelit.net";
 
 export function configDir() {

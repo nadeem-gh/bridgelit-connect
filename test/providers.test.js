@@ -63,3 +63,40 @@ test("claude login is read from `claude auth status`", () => {
   assert.equal(claudeAuth('{"loggedIn": true, "authMethod": "claude.ai"}').method, "claude.ai");
   assert.equal(claudeAuth("older CLI without the command").loggedIn, true);
 });
+
+test("a job's page picture goes to Claude as a stream-JSON message", async () => {
+  const { claudeArgs, claudeInput } = await import("../src/providers.js");
+  const images = [{ media_type: "image/jpeg", data: "QUJD" }];
+  const args = claudeArgs({ system: "S", images });
+  assert.deepEqual(args.slice(1, 3), ["--input-format", "stream-json"]);
+  assert.ok(!claudeArgs({ system: "S" }).includes("--input-format"));
+  const message = JSON.parse(claudeInput("Fix the lines.", images));
+  assert.equal(message.type, "user");
+  assert.deepEqual(message.message.content[0], {
+    type: "image",
+    source: { type: "base64", media_type: "image/jpeg", data: "QUJD" },
+  });
+  assert.deepEqual(message.message.content[1], { type: "text", text: "Fix the lines." });
+  assert.equal(claudeInput("plain", []), "plain");
+});
+
+test("Codex gets the page picture as an --image file before the stdin marker", async () => {
+  const { codexArgs } = await import("../src/providers.js");
+  const args = codexArgs({ imagePaths: ["/tmp/x/page-1.jpg"] });
+  assert.deepEqual(args.slice(-4), ["--image", "/tmp/x/page-1.jpg", "--", "-"]);
+  assert.deepEqual(codexArgs({}).slice(-1), ["-"]);
+  assert.ok(!codexArgs({}).includes("--"));
+});
+
+test("only usable pictures from the job are sent", async () => {
+  const { jobImages } = await import("../src/apikeys.js");
+  assert.deepEqual(jobImages(undefined), []);
+  assert.deepEqual(
+    jobImages([
+      { media_type: "image/png", data: "QQ==" },
+      { media_type: "text/html", data: "PGI+" },
+      { media_type: "image/jpeg", data: "" },
+    ]),
+    [{ media_type: "image/png", data: "QQ==" }],
+  );
+});
