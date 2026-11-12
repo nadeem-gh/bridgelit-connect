@@ -103,6 +103,36 @@ test("a suggested model the plan refuses falls back to the CLI default", async (
   assert.deepEqual(api.calls.at(-1), ["result", 7, { answer: "ok" }]);
 });
 
+test("a model the user picked in BridgeLit wins over Connect's own setting", async () => {
+  const api = fakeApi();
+  let used;
+  await handleJob(
+    api,
+    { ...job, provider: "codex", model: "gpt-5.6-luna", model_chosen: true },
+    { models: { codex: "gpt-6.1-terra" } },
+    quiet,
+    async ({ model }) => {
+      used = model;
+      return "ok";
+    },
+  );
+  assert.equal(used, "gpt-5.6-luna");
+});
+
+test("a picked model the plan refuses fails the job instead of using another", async () => {
+  const api = fakeApi();
+  const models = [];
+  await handleJob(api, { ...job, provider: "codex", model: "gpt-x", model_chosen: true }, {}, quiet, async ({ model }) => {
+    models.push(model);
+    throw new ProviderError("model_not_found: The model gpt-x does not exist");
+  });
+  assert.deepEqual(models, ["gpt-x"]);
+  const [kind, id, body] = api.calls.at(-1);
+  assert.equal(kind, "result");
+  assert.equal(id, 7);
+  assert.match(body.error, /gpt-x/);
+});
+
 test("runs jobs in parallel up to the server's limit", async () => {
   const queue = [1, 2, 3, 4].map((id) => ({ ...job, id }));
   let running = 0;

@@ -145,9 +145,12 @@ export async function handleJob(api, job, options, log, run = options?.run ?? ru
     }
   };
 
-  // A model set in Connect wins; else the one BridgeLit's own CLI uses (job.model).
-  const own = options.models?.[job.provider];
-  const suggested = own ? "" : String(job.model ?? "");
+  // The model the user picked for this job in BridgeLit wins (``model_chosen``); else a
+  // model set in Connect; else the one BridgeLit's own CLI uses (job.model, a suggestion).
+  // A picked model the plan refuses fails the job: it is never swapped for another.
+  const chosen = job.model_chosen ? String(job.model ?? "") : "";
+  const own = chosen ? "" : options.models?.[job.provider];
+  const suggested = chosen || own ? "" : String(job.model ?? "");
   const runWith = (model) =>
     run({
       provider: job.provider,
@@ -182,7 +185,7 @@ export async function handleJob(api, job, options, log, run = options?.run ?? ru
   try {
     let answer;
     try {
-      answer = await patient(own || suggested || undefined);
+      answer = await patient(chosen || own || suggested || undefined);
     } catch (error) {
       if (!(suggested && error instanceof ProviderError && MODEL_REFUSED.test(error.message))) throw error;
       log(`${suggested} isn't on this plan; using ${LABELS[job.provider] ?? job.provider}'s default model.`);
