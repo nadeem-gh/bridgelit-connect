@@ -15,7 +15,8 @@ test("claude runs with every tool and MCP server turned off", () => {
 
 test("codex runs read-only and reads the prompt from stdin", () => {
   const args = codexArgs({});
-  assert.deepEqual(args, ["exec", "--json", "--skip-git-repo-check", "--sandbox", "read-only", "-"]);
+  assert.deepEqual(args.slice(0, 5), ["exec", "--json", "--skip-git-repo-check", "--sandbox", "read-only"]);
+  assert.equal(args.at(-1), "-");
 });
 
 test("claude parser streams text and returns the final result", () => {
@@ -99,4 +100,14 @@ test("only usable pictures from the job are sent", async () => {
     ]),
     [{ media_type: "image/png", data: "QQ==" }],
   );
+});
+
+test("codex text jobs run with web search and tools turned off", async () => {
+  const { codexArgs } = await import("../src/providers.js");
+  const args = codexArgs({});
+  assert.equal(args[args.indexOf('web_search="disabled"') - 1], "-c");
+  for (const name of ["shell_tool", "unified_exec", "browser_use", "computer_use", "view_image"]) {
+    assert.ok(args.includes(`features.${name}=false`), name);
+  }
+  assert.ok(!args.includes("--disable"));
 });

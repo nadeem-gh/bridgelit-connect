@@ -81,11 +81,38 @@ function windowsStop(p) {
   spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", windowsStopScript(p)], { encoding: "utf8" });
 }
 
+/** Folders the AI CLIs are installed in by BridgeLit's install, their own installers or Homebrew. */
+export function cliFolders(home = os.homedir(), platform = process.platform) {
+  if (platform === "win32") return [];
+  return [
+    path.join(home, ".bridgelit", "bin"),
+    path.join(home, ".bridgelit", "node", "bin"),
+    path.join(home, ".local", "bin"),
+    path.join(home, ".claude", "local"),
+    path.join(home, ".npm-global", "bin"),
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+  ];
+}
+
+/**
+ * The PATH the background agent runs with: this shell's, plus the usual CLI
+ * folders that exist. A shell opened before an install (or without its profile)
+ * can lack them, and then the service wouldn't find `claude` or `codex`.
+ */
+export function servicePath(current = process.env.PATH ?? "", folders = cliFolders(), exists = fs.existsSync) {
+  const sep = process.platform === "win32" ? ";" : ":";
+  const parts = current.split(sep).filter(Boolean);
+  const extra = folders.filter((f) => exists(f) && !parts.includes(f));
+  const all = [...extra, ...parts];
+  return all.length ? all.join(sep) : "/usr/local/bin:/usr/bin:/bin";
+}
+
 function paths() {
   return {
     node: process.execPath,
     bin: BIN,
-    pathEnv: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
+    pathEnv: servicePath(),
     logFile: path.join(configDir(), "connect.log"),
     pidFile: path.join(configDir(), "connect-loop.pid"),
     loopFile: path.join(configDir(), "connect-loop.ps1"),
