@@ -1,6 +1,6 @@
 # BridgeLit Connect
 
-Answer the questions you ask on [BridgeLit](https://bridgelit.net) with **your own Claude or ChatGPT
+Answer the questions you ask on [BridgeLit](https://bridgelit.net) with **your own Claude, ChatGPT or Gemini
 subscription, or your own API key**, on your own computer. No copying and pasting between tabs, and no
 passwords or keys given to BridgeLit.
 
@@ -10,7 +10,8 @@ passwords or keys given to BridgeLit.
  │ you type a question           │◄──────────►│ bridgelit-connect            │
  │ server picks book passages    │ (outbound  │  └─ claude -p  (Claude plan) │
  │ shows the checked answer      │   only)    │  └─ codex exec (ChatGPT plan)│
- └───────────────────────────────┘            │  └─ your API key (keychain)  │
+ └───────────────────────────────┘            │  └─ gemini     (Google plan) │
+                                              │  └─ your API key (keychain)  │
                                               └──────────────────────────────┘
 ```
 
@@ -18,7 +19,7 @@ passwords or keys given to BridgeLit.
 
 ### The easy way: one line
 
-On **Connect your AI** in the BridgeLit reader or author portal, pick Claude or ChatGPT and copy the line
+On **Connect your AI** in the BridgeLit reader or author portal, pick Claude, ChatGPT or Gemini and copy the line
 it shows into Terminal (macOS / Linux) or PowerShell (Windows). The line carries a one-time code (good for
 30 minutes) and runs a short script you can read first at
 [bridgelit.net/api/bridge/connect.sh](https://bridgelit.net/api/bridge/connect.sh) /
@@ -28,7 +29,7 @@ it shows into Terminal (macOS / Linux) or PowerShell (Windows). The line carries
    checks its SHA-256;
 2. installs this package into `~/.bridgelit` (no admin password, no `sudo`);
 3. connects the computer with the code (`bridgelit-connect login --token …`);
-4. installs Claude Code or Codex if missing and opens its sign-in;
+4. installs Claude Code, Codex or Gemini CLI if missing and opens its sign-in;
 5. starts Connect now and at every login (`service install`).
 
 Remove everything again with
@@ -50,7 +51,9 @@ Then pick one or more ways to pay for answers:
 | Claude plan (Pro / Max), no key | `bridgelit-connect setup claude` | Installs Claude Code and runs `claude auth login` |
 | ChatGPT plan (Plus / Pro / Team), no key | `bridgelit-connect setup chatgpt` | Installs OpenAI's Codex CLI and runs `codex login` (choose "Sign in with ChatGPT") |
 | Anthropic API key | `bridgelit-connect key add anthropic` | Checks the key, then stores it in your keychain |
+| Gemini plan (Google AI Pro / Ultra, Code Assist), no key | `bridgelit-connect setup gemini` | Installs Google's Gemini CLI and runs it once: choose "Sign in with Google", then `/quit` |
 | OpenAI API key | `bridgelit-connect key add openai` | Checks the key, then stores it in your keychain |
+| Gemini API key (Google AI Studio) | `bridgelit-connect key add gemini` | Checks the key, then stores it in your keychain |
 
 `bridgelit-connect doctor` shows what is ready.
 
@@ -85,15 +88,16 @@ starts it hidden at sign-in and restarts it if it stops.
 | `status` | Shows the server, this computer, and the AIs it offers. |
 | `doctor` | Checks Node, Claude Code and Codex are installed and signed in. |
 | `logout` | Disconnects this computer and deletes its token. |
-| `setup claude\|chatgpt` | Installs Claude Code or Codex and opens its sign-in. |
-| `key add\|remove anthropic\|openai`, `key list` | Manages your own API keys (OS keychain, never uploaded). |
+| `setup claude\|chatgpt\|gemini` | Installs Claude Code, Codex or Gemini CLI and opens its sign-in. |
+| `key add\|remove anthropic\|openai\|gemini`, `key list` | Manages your own API keys (OS keychain, never uploaded). |
 
-API-key answers use `claude-opus-5-5` and `gpt-5.5` by default. Change them with
-`start --anthropic-model …` or `--openai-model …`. Claude API requests opt into Anthropic's server-side
+API-key answers use `claude-opus-5-5`, `gpt-5.5` and `gemini-3.1-pro-preview` by default. Change them with
+`start --anthropic-model …`, `--openai-model …` or `--gemini-api-model …` (Gemini CLI: `--gemini-model …`).
+A model you pick in BridgeLit always wins over these. Claude API requests opt into Anthropic's server-side
 refusal fallback (`fallbacks: "default"`).
 
-Environment: `BRIDGELIT_ANTHROPIC_BASE_URL` / `BRIDGELIT_OPENAI_BASE_URL` (proxies only), `BRIDGELIT_SERVER` (default `https://bridgelit.net`), `BRIDGELIT_CLAUDE_PATH`,
-`BRIDGELIT_CODEX_PATH`, `BRIDGELIT_CONNECT_HOME` (config folder),
+Environment: `BRIDGELIT_ANTHROPIC_BASE_URL` / `BRIDGELIT_OPENAI_BASE_URL` / `BRIDGELIT_GEMINI_BASE_URL` (proxies only), `BRIDGELIT_SERVER` (default `https://bridgelit.net`), `BRIDGELIT_CLAUDE_PATH`,
+`BRIDGELIT_CODEX_PATH`, `BRIDGELIT_GEMINI_PATH`, `BRIDGELIT_CONNECT_HOME` (config folder),
 `BRIDGELIT_CREDENTIAL_STORE=file` (skip the OS keychain on headless machines).
 
 ## Pictures
@@ -143,15 +147,20 @@ All device calls send `Authorization: Bridge <token>`. A `401` means the device 
 
 See [SECURITY.md](SECURITY.md). In short:
 
-- Your Claude and ChatGPT logins, and any API keys you add, never leave your computer. API keys are sent
-  only to `api.anthropic.com` and `api.openai.com`, even if `ANTHROPIC_BASE_URL` or `OPENAI_BASE_URL` is set
-  for another tool. API-key variables in your shell are hidden from the CLIs so your subscription is used
+- Your Claude, ChatGPT and Google logins, and any API keys you add, never leave your computer. API keys are
+  sent only to `api.anthropic.com`, `api.openai.com` and `generativelanguage.googleapis.com`, even if
+  `ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL` or `GOOGLE_GEMINI_BASE_URL` is set for another tool. API-key variables in your shell are hidden from the CLIs so your subscription is used
   (pass `--use-api-keys` to change this).
 - API-key answers are plain requests with no tools defined.
 - Every run happens in a fresh, empty temporary folder.
   - **Claude:** `--tools ""` turns off every tool. `--strict-mcp-config` with an empty config loads no
     MCP servers. `--no-session-persistence` saves nothing.
   - **Codex:** `--sandbox read-only`.
+  - **Gemini CLI:** a policy file (`--policy`) denies every tool and MCP tool; the run folder's
+    `.gemini/settings.json` registers no tools (`tools.core: []`), excludes every built-in one and loads
+    no context files; `--allowed-mcp-server-names` allows no MCP server; BridgeLit's system prompt
+    replaces the CLI's agent prompt (`GEMINI_SYSTEM_MD`). Gemini CLI can't read page pictures this way,
+    so OCR polish with pictures needs the Gemini API key.
 - If the model tries to use any tool anyway, for example because a book passage contains planted
   instructions, the run is killed and the answer is thrown away.
 - An answer that looks like a key, token or private path from this computer is never sent back.
@@ -168,5 +177,5 @@ Point it at a local backend with `--server http://localhost:8000` (plain HTTP is
 
 ## Terms
 
-You use your own Claude or ChatGPT plan under your own agreement with Anthropic or OpenAI. BridgeLit
+You use your own Claude, ChatGPT or Gemini plan under your own agreement with Anthropic, OpenAI or Google. BridgeLit
 Connect runs only questions you type yourself in BridgeLit, one at a time, on your own computer.

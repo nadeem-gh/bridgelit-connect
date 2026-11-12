@@ -1,7 +1,7 @@
 {
   "name": "bridgelit-connect",
-  "version": "0.7.1",
-  "description": "Answer BridgeLit questions with your own Claude or ChatGPT subscription, from your own computer.",
+  "version": "0.8.0",
+  "description": "Answer BridgeLit questions with your own Claude, ChatGPT or Gemini subscription, from your own computer.",
   "type": "module",
   "bin": {
     "bridgelit-connect": "bin/bridgelit-connect.js"
