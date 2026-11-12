@@ -12,7 +12,7 @@ import { LABELS, detect, readyProviders } from "./providers.js";
 import { installService, uninstallService } from "./service.js";
 
 const HELP = `bridgelit-connect ${VERSION}
-Answer questions you ask on BridgeLit with your own Claude or ChatGPT
+Answer questions you ask on BridgeLit with your own Claude, ChatGPT or Gemini
 subscription, on this computer. ChatGPT (Codex) and an OpenAI API key can
 also make and enhance pictures for your books.
 
@@ -21,11 +21,11 @@ Usage:
   bridgelit-connect login --token CODE                   connect with the code in a BridgeLit install line
   bridgelit-connect start [--approve]                    stay connected and answer questions
   bridgelit-connect status                               show the connection
-  bridgelit-connect doctor                               check Claude / Codex are ready
+  bridgelit-connect doctor                               check Claude / Codex / Gemini are ready
   bridgelit-connect logout                               disconnect this computer
   bridgelit-connect service install|uninstall            start automatically at login
-  bridgelit-connect setup claude|chatgpt                 install Claude Code or Codex and sign in
-  bridgelit-connect key add|remove anthropic|openai      use your own API key (kept in your keychain)
+  bridgelit-connect setup claude|chatgpt|gemini          install Claude Code, Codex or Gemini CLI and sign in
+  bridgelit-connect key add|remove anthropic|openai|gemini  use your own API key (kept in your keychain)
   bridgelit-connect key list                             show which API keys are stored
 
 Options:
@@ -35,10 +35,12 @@ Options:
   --parallel N        answer up to N questions at once (default: BridgeLit's limit, 3)
   --claude-model M    model for Claude, e.g. sonnet (default: Claude Code's default)
   --codex-model M     model for Codex (default: Codex's default)
+  --gemini-model M    model for Gemini CLI, e.g. gemini-3.8-flash (default: Gemini CLI's default)
   --anthropic-model M model for your Claude API key (default: claude-opus-5-5)
   --openai-model M    model for your OpenAI API key (default: gpt-5.5)
+  --gemini-api-model M  model for your Gemini API key (default: gemini-3.1-pro-preview)
   --openai-image-model M  picture model for your OpenAI API key (default: gpt-image-1)
-  --use-api-keys      let the CLIs use ANTHROPIC_API_KEY / OPENAI_API_KEY if set
+  --use-api-keys      let the CLIs use ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY if set
                       (by default they are hidden so your subscription login is used)
 `;
 
@@ -175,6 +177,8 @@ async function start(args) {
       ...(args["codex-model"] ? { codex: args["codex-model"] } : {}),
       ...(args["anthropic-model"] ? { anthropic_api: args["anthropic-model"] } : {}),
       ...(args["openai-model"] ? { openai_api: args["openai-model"] } : {}),
+      ...(args["gemini-model"] ? { gemini: args["gemini-model"] } : {}),
+      ...(args["gemini-api-model"] ? { gemini_api: args["gemini-api-model"] } : {}),
     },
     imageModel: args["openai-image-model"] ?? current.config.image_model,
     // Jobs at once (default: what BridgeLit allows, 3); 1 runs them one by one.
@@ -229,7 +233,8 @@ function doctor() {
   }
   if (!found.claude.installed) console.log("  Set up Claude (no API key): bridgelit-connect setup claude");
   if (!found.codex.installed) console.log("  Set up ChatGPT (no API key): bridgelit-connect setup chatgpt");
-  if (process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY) {
+  if (!found.gemini.installed) console.log("  Set up Gemini (no API key): bridgelit-connect setup gemini");
+  if (process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY) {
     console.log("Note: an API key is set in your shell. BridgeLit Connect hides it from the CLIs so your subscription is used (pass --use-api-keys to change that).");
   }
   const current = session();
@@ -279,7 +284,7 @@ async function keyCommand(sub, name) {
   }
   const provider = apiProviderFor(name);
   if (!provider || !["add", "remove"].includes(sub)) {
-    throw new Error("Use `key add anthropic`, `key add openai`, `key remove …` or `key list`.");
+    throw new Error("Use `key add anthropic`, `key add openai`, `key add gemini`, `key remove …` or `key list`.");
   }
   if (sub === "remove") {
     removeKey(provider);
@@ -288,7 +293,8 @@ async function keyCommand(sub, name) {
   }
   const key = await readSecret(`Paste your ${API_LABELS[provider]} (it stays on this computer): `);
   if (!looksLikeKey(provider, key)) {
-    throw new Error(`That doesn't look like an ${provider === "anthropic_api" ? "Anthropic (sk-ant-…)" : "OpenAI (sk-…)"} key.`);
+    const shapes = { anthropic_api: "an Anthropic (sk-ant-…)", openai_api: "an OpenAI (sk-…)", gemini_api: "a Gemini (AIza…)" };
+    throw new Error(`That doesn't look like ${shapes[provider]} key.`);
   }
   process.stdout.write("Checking the key… ");
   const problem = await checkKey(provider, key);
@@ -303,14 +309,18 @@ async function keyCommand(sub, name) {
 }
 
 const SETUP = {
-  claude: { label: "Claude Code", pkg: "@anthropic-ai/claude-code", login: ["claude", ["auth", "login"]] },
-  chatgpt: { label: "Codex (ChatGPT)", pkg: "@openai/codex", login: ["codex", ["login"]] },
+  claude: { label: "Claude Code", pkg: "@anthropic-ai/claude-code", account: "Claude", login: ["claude", ["auth", "login"]] },
+  chatgpt: { label: "Codex (ChatGPT)", pkg: "@openai/codex", account: "ChatGPT", login: ["codex", ["login"]] },
+  // Gemini CLI has no login command: it asks on its first run. Choose
+  // "Sign in with Google", then type /quit.
+  gemini: { label: "Gemini CLI", pkg: "@google/gemini-cli", account: "Google", login: ["gemini", []] },
 };
+const SETUP_ALIASES = { codex: "chatgpt", google: "gemini" };
 
-/** Install Claude Code or Codex and open its sign-in, so the user's plan can be used. */
+/** Install Claude Code, Codex or Gemini CLI and open its sign-in, so the user's plan can be used. */
 function setup(name) {
-  const what = SETUP[name === "codex" ? "chatgpt" : name];
-  if (!what) throw new Error("Use `setup claude` or `setup chatgpt`.");
+  const what = SETUP[SETUP_ALIASES[name] ?? name];
+  if (!what) throw new Error("Use `setup claude`, `setup chatgpt` or `setup gemini`.");
   const shell = process.platform === "win32";
   const installed = spawnSync(what.login[0], ["--version"], { shell, encoding: "utf8" }).status === 0;
   if (!installed) {
@@ -318,7 +328,10 @@ function setup(name) {
     const r = spawnSync("npm", ["install", "-g", what.pkg], { stdio: "inherit", shell });
     if (r.status !== 0) throw new Error(`Install failed. Run it yourself: npm install -g ${what.pkg}`);
   }
-  console.log(`Signing in to ${what.label}. Choose your ${name === "claude" ? "Claude" : "ChatGPT"} account, not an API key.`);
+  console.log(`Signing in to ${what.label}. Choose your ${what.account} account, not an API key.`);
+  if (what.pkg === "@google/gemini-cli") {
+    console.log("Pick \"Sign in with Google\" when Gemini asks, then type /quit once it's ready.");
+  }
   const r = spawnSync(what.login[0], what.login[1], { stdio: "inherit", shell });
   if (r.status !== 0) throw new Error(`Sign-in didn't finish. Run \`${what.login[0]} ${what.login[1].join(" ")}\` yourself.`);
   console.log("Done. Check with `bridgelit-connect doctor`.");

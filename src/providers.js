@@ -1,30 +1,36 @@
-// Runs one prompt through the user's own `claude` (Claude Code) or `codex`
-// (OpenAI Codex CLI), signed in with their own subscription.
+// Runs one prompt through the user's own `claude` (Claude Code), `codex`
+// (OpenAI Codex CLI) or `gemini` (Gemini CLI), signed in with their own plan.
 //
 // Each run is locked down: an empty temporary folder, no MCP servers, and for
-// Claude no tools at all. If the model tries to use a tool anyway (read a file,
+// Claude and Gemini no tools at all (see gemini.js). If the model tries to use a tool anyway (read a file,
 // run a command, browse), the run is stopped and nothing is sent back.
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { API_LABELS, jobImages, keyedProviders, runApiProvider } from "./apikeys.js";
+import { API_LABELS, KEY_NAMES, jobImages, keyedProviders, runApiProvider } from "./apikeys.js";
 import { ProviderError, ToolAttempt } from "./errors.js";
+import { geminiArgs, geminiParser, geminiRunFiles, geminiSignedIn } from "./gemini.js";
 
-export const PROVIDERS = ["claude", "codex", "anthropic_api", "openai_api"];
-const CLI_PROVIDERS = ["claude", "codex"];
+export const PROVIDERS = ["claude", "codex", "gemini", "anthropic_api", "openai_api", "gemini_api"];
+const CLI_PROVIDERS = ["claude", "codex", "gemini"];
 export const LABELS = {
   claude: "Claude",
   codex: "ChatGPT (Codex)",
+  gemini: "Gemini",
   anthropic_api: "Claude API key",
   openai_api: "OpenAI API key",
+  gemini_api: "Gemini API key",
 };
+// Set to run a CLI from somewhere other than PATH.
+const CLI_PATH_ENV = { claude: "BRIDGELIT_CLAUDE_PATH", codex: "BRIDGELIT_CODEX_PATH", gemini: "BRIDGELIT_GEMINI_PATH" };
 
 // Removed from the CLI's environment so it uses the subscription login, not an
 // API key that would bill a separate account.
 const API_KEY_VARS = {
   claude: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX"],
   codex: ["OPENAI_API_KEY", "CODEX_API_KEY", "OPENAI_BASE_URL", "AZURE_OPENAI_API_KEY"],
+  gemini: ["GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GEMINI_BASE_URL", "GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_VERTEX_BASE_URL"],
 };
 
 const CODEX_TOOL_ITEMS = new Set(["command_execution", "file_change", "mcp_tool_call", "web_search", "tool_call"]);
@@ -32,8 +38,7 @@ const CODEX_TOOL_ITEMS = new Set(["command_execution", "file_change", "mcp_tool_
 export { ProviderError, ToolAttempt };
 
 function cliPath(provider) {
-  const env = provider === "claude" ? process.env.BRIDGELIT_CLAUDE_PATH : process.env.BRIDGELIT_CODEX_PATH;
-  return env || provider;
+  return process.env[CLI_PATH_ENV[provider]] || provider;
 }
 
 function quick(cmd, args, env = process.env) {
@@ -81,6 +86,25 @@ export function detect() {
   } else {
     out.codex = { installed: false, version: "", ready: false, note: "Not installed." };
   }
+  const gemini = quick(cliPath("gemini"), ["--version"]);
+  if (gemini.ok) {
+    const help = quick(cliPath("gemini"), ["--help"]).out;
+    // `--policy` (deny every tool) and `--skip-trust` came with the policy engine.
+    const locked = help.includes("--policy") && help.includes("--skip-trust");
+    const signedIn = geminiSignedIn();
+    out.gemini = {
+      installed: true,
+      version: gemini.out.split("\n").pop(),
+      ready: locked && signedIn,
+      note: !locked
+        ? "Update Gemini CLI (npm i -g @google/gemini-cli): this version can't turn tools off."
+        : signedIn
+          ? ""
+          : "Run `gemini`, choose Sign in with Google, and use your Google AI plan.",
+    };
+  } else {
+    out.gemini = { installed: false, version: "", ready: false, note: "Not installed." };
+  }
   const keyed = keyedProviders();
   for (const provider of Object.keys(API_LABELS)) {
     const has = keyed.includes(provider);
@@ -88,7 +112,7 @@ export function detect() {
       installed: has,
       version: has ? "key in keychain" : "",
       ready: has,
-      note: has ? "" : `No key. Add one with \`bridgelit-connect key add ${provider === "anthropic_api" ? "anthropic" : "openai"}\`.`,
+      note: has ? "" : `No key. Add one with \`bridgelit-connect key add ${KEY_NAMES[provider]}\`.`,
     };
   }
   return out;
@@ -264,10 +288,15 @@ export function codexParser() {
 
 export function friendlyError(provider, message) {
   const text = String(message ?? "");
-  if (/401|unauthori[sz]ed|invalid api key|please run \/login|not logged in|log ?in/i.test(text)) {
-    return provider === "claude"
-      ? "Claude isn't signed in on this computer. Run `claude`, then /login with your Claude subscription."
-      : "Codex isn't signed in on this computer. Run `codex login` and sign in with ChatGPT.";
+  if (/401|unauthori[sz]ed|invalid api key|please run \/login|not logged in|log ?in|auth method|set an auth/i.test(text)) {
+    return {
+      claude: "Claude isn't signed in on this computer. Run `claude`, then /login with your Claude subscription.",
+      codex: "Codex isn't signed in on this computer. Run `codex login` and sign in with ChatGPT.",
+      gemini: "Gemini isn't signed in on this computer. Run `gemini` and choose Sign in with Google.",
+    }[provider] ?? `${LABELS[provider]} isn't signed in on this computer.`;
+  }
+  if (provider === "gemini" && /RESOURCE_EXHAUSTED|quota/i.test(text)) {
+    return "Your Gemini plan is at its usage limit right now. Try again later.";
   }
   if (/429|rate.?limit|usage limit|too many requests|overloaded/i.test(text)) {
     return `Your ${LABELS[provider]} plan is at its usage limit right now. Try again later.`;
@@ -289,8 +318,14 @@ export async function runProvider(job) {
 function runCli(job) {
   const { provider } = job;
   if (!CLI_PROVIDERS.includes(provider)) return Promise.reject(new ProviderError(`Unknown AI: ${provider}`));
-  const workdir = fs.mkdtempSync(path.join(os.tmpdir(), "bridgelit-"));
   const images = jobImages(job.images);
+  if (provider === "gemini" && images.length) {
+    // Gemini CLI reads pictures only through its file tools, which stay off.
+    return Promise.reject(
+      new ProviderError("Gemini CLI can't read page pictures with its tools off. Use your Gemini API key for this."),
+    );
+  }
+  const workdir = fs.mkdtempSync(path.join(os.tmpdir(), "bridgelit-"));
   // Codex reads pictures from files; they live in the job's own folder.
   const imagePaths = provider === "codex"
     ? images.map((image, n) => {
@@ -299,11 +334,19 @@ function runCli(job) {
         return file;
       })
     : [];
-  const args = provider === "claude" ? claudeArgs({ ...job, images }) : codexArgs({ ...job, imagePaths });
+  const gemini = provider === "gemini" ? geminiRunFiles(workdir, job.system) : null;
+  const args = provider === "claude"
+    ? claudeArgs({ ...job, images })
+    : gemini
+      ? geminiArgs({ ...job, policyPath: gemini.policyPath })
+      : codexArgs({ ...job, imagePaths });
+  // Gemini gets BridgeLit's system prompt from a file (GEMINI_SYSTEM_MD).
   const input = provider === "claude"
     ? claudeInput(job.prompt, images)
-    : `${job.system}\n\n---\n\n${job.prompt}`;
-  const parser = provider === "claude" ? claudeParser() : codexParser();
+    : gemini
+      ? job.prompt
+      : `${job.system}\n\n---\n\n${job.prompt}`;
+  const parser = provider === "claude" ? claudeParser() : gemini ? geminiParser() : codexParser();
 
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -311,7 +354,7 @@ function runCli(job) {
     let buffer = "";
     const child = spawn(cliPath(provider), args, {
       cwd: workdir,
-      env: cleanEnv(provider, job.keepApiKeys),
+      env: { ...cleanEnv(provider, job.keepApiKeys), ...(gemini?.env ?? {}) },
       stdio: ["pipe", "pipe", "pipe"],
       shell: process.platform === "win32",
     });
