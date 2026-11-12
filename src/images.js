@@ -75,6 +75,7 @@ export function codexImageArgs({ model, imagePath }) {
 export function codexImageParser() {
   let threadId = "";
   let error = null;
+  let reply = "";
   return {
     line(raw) {
       let event;
@@ -88,12 +89,15 @@ export function codexImageParser() {
       if ((event.type === "item.started" || event.type === "item.completed") && CODEX_TOOL_ITEMS.has(item.type)) {
         throw new ProviderError(`Codex tried to use a tool (${item.type}); the picture was stopped for safety.`);
       }
+      if (event.type === "item.completed" && item.type === "agent_message" && item.text) {
+        reply = String(item.text).trim();
+      }
       if (event.type === "error" || event.type === "turn.failed") {
         error = String(event.message ?? event.error?.message ?? "Codex failed.");
       }
     },
     result() {
-      return { threadId, error };
+      return { threadId, error, reply };
     },
   };
 }
@@ -160,9 +164,14 @@ export function runCodexImage(job, { cli = "codex", env = process.env, home = co
     child.on("close", (code) => {
       if (buffer.trim()) feed(buffer.trim());
       if (settled) return;
-      const { threadId, error } = parser.result();
+      const { threadId, error, reply } = parser.result();
       if (error) return finish(new ProviderError(error.slice(0, 280)));
       const file = threadId ? newestImage(codexImagesDir(threadId, home)) : null;
+      if (!file && code === 0 && reply) {
+        // Codex answered in words instead of drawing (often asking for more detail).
+        const said = reply.replace(/\s+/g, " ").slice(0, 200);
+        return finish(new ProviderError(`Codex answered instead of drawing: "${said}"`));
+      }
       if (!file) {
         const why = code !== 0 && stderr ? ` (${stderr.trim().split("\n").pop().slice(0, 160)})` : "";
         return finish(

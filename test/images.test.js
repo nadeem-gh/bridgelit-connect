@@ -85,6 +85,22 @@ test("codex run without a saved picture explains how to turn images on", async (
   );
 });
 
+test("codex run that answers in words shows what Codex said", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "codexhome-"));
+  const { spawnImpl } = fakeSpawn(
+    [
+      { type: "thread.started", thread_id: "t3" },
+      { type: "item.completed", item: { type: "agent_message", text: "Please send the paragraph." } },
+      { type: "turn.completed" },
+    ],
+    { home, threadId: "t3", write: false },
+  );
+  await assert.rejects(
+    runCodexImage({ provider: "codex", prompt: "this paragraph", timeoutMs: 5000 }, { home, spawnImpl }),
+    (e) => /answered instead of drawing: "Please send the paragraph\."/.test(e.message) && !/image_generation/.test(e.message),
+  );
+});
+
 test("newestImage ignores other files", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "imgs-"));
   fs.writeFileSync(path.join(dir, "notes.txt"), "x");
