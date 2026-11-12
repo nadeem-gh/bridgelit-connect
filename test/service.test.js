@@ -40,3 +40,11 @@ test("login --token=CODE keeps a code that starts with a dash", () => {
   assert.equal(parseArgs(["login", "--token=-abc_DEF"]).token, "-abc_DEF");
   assert.equal(parseArgs(["login", "--token", "xyz"]).token, "xyz");
 });
+
+test("the service PATH adds the usual AI CLI folders that exist, first", async () => {
+  const { servicePath } = await import("../src/service.js");
+  const have = new Set(["/h/.bridgelit/bin", "/h/.local/bin", "/usr/bin"]);
+  const out = servicePath("/usr/bin:/bin", ["/h/.bridgelit/bin", "/h/.local/bin", "/h/missing", "/usr/bin"], (f) => have.has(f));
+  assert.equal(out, "/h/.bridgelit/bin:/h/.local/bin:/usr/bin:/bin");
+  assert.equal(servicePath("", [], () => false), "/usr/local/bin:/usr/bin:/bin");
+});

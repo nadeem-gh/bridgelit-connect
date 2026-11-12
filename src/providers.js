@@ -134,8 +134,33 @@ export function claudeArgs({ system, model, images }) {
   return args;
 }
 
+// Codex tools a text job never needs. With them on, the model sometimes searches
+// the web or runs commands, and the agent has to throw the answer away. Set as
+// `-c` values so a Codex that doesn't know one of them still runs.
+const CODEX_TOOLS_OFF = [
+  "shell_tool",
+  "unified_exec",
+  "apps",
+  "browser_use",
+  "browser_use_external",
+  "in_app_browser",
+  "computer_use",
+  "image_generation",
+  "view_image",
+  "skill_search",
+  "tool_suggest",
+  "sleep_tool",
+];
+
+export function codexToolsOff() {
+  return [
+    "-c", 'web_search="disabled"',
+    ...CODEX_TOOLS_OFF.flatMap((name) => ["-c", `features.${name}=false`]),
+  ];
+}
+
 export function codexArgs({ model, imagePaths }) {
-  const args = ["exec", "--json", "--skip-git-repo-check", "--sandbox", "read-only"];
+  const args = ["exec", "--json", "--skip-git-repo-check", "--sandbox", "read-only", ...codexToolsOff()];
   if (model) args.push("--model", model);
   for (const imagePath of imagePaths ?? []) args.push("--image", imagePath);
   // `--image` takes several values, so end the options before the stdin marker.
