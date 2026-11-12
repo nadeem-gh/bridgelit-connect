@@ -8,7 +8,7 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { API_LABELS, keyedProviders, runApiProvider } from "./apikeys.js";
+import { API_LABELS, jobImages, keyedProviders, runApiProvider } from "./apikeys.js";
 import { ProviderError, ToolAttempt } from "./errors.js";
 
 export const PROVIDERS = ["claude", "codex", "anthropic_api", "openai_api"];
@@ -116,9 +116,11 @@ export function cleanEnv(provider, keepApiKeys) {
   return env;
 }
 
-export function claudeArgs({ system, model }) {
+export function claudeArgs({ system, model, images }) {
   const args = [
     "-p",
+    // Pictures go in a stream-JSON user message (see claudeInput).
+    ...(images?.length ? ["--input-format", "stream-json"] : []),
     "--output-format", "stream-json",
     "--verbose",
     "--include-partial-messages",
@@ -132,12 +134,28 @@ export function claudeArgs({ system, model }) {
   return args;
 }
 
-export function codexArgs({ model }) {
+export function codexArgs({ model, imagePaths }) {
   const args = ["exec", "--json", "--skip-git-repo-check", "--sandbox", "read-only"];
   if (model) args.push("--model", model);
+  for (const imagePath of imagePaths ?? []) args.push("--image", imagePath);
+  // `--image` takes several values, so end the options before the stdin marker.
+  if (imagePaths?.length) args.push("--");
   args.push("-");
   return args;
 }
+
+/** What `claude -p` reads on stdin: the plain prompt, or one stream-JSON message with pictures. */
+export function claudeInput(prompt, images) {
+  if (!images?.length) return prompt;
+  const content = images.map((i) => ({
+    type: "image",
+    source: { type: "base64", media_type: i.media_type, data: i.data },
+  }));
+  content.push({ type: "text", text: prompt });
+  return `${JSON.stringify({ type: "user", message: { role: "user", content } })}\n`;
+}
+
+const EXTENSIONS = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" };
 
 /** Reads Claude Code `stream-json` lines. */
 export function claudeParser() {
@@ -247,8 +265,19 @@ function runCli(job) {
   const { provider } = job;
   if (!CLI_PROVIDERS.includes(provider)) return Promise.reject(new ProviderError(`Unknown AI: ${provider}`));
   const workdir = fs.mkdtempSync(path.join(os.tmpdir(), "bridgelit-"));
-  const args = provider === "claude" ? claudeArgs(job) : codexArgs(job);
-  const input = provider === "claude" ? job.prompt : `${job.system}\n\n---\n\n${job.prompt}`;
+  const images = jobImages(job.images);
+  // Codex reads pictures from files; they live in the job's own folder.
+  const imagePaths = provider === "codex"
+    ? images.map((image, n) => {
+        const file = path.join(workdir, `page-${n + 1}.${EXTENSIONS[image.media_type]}`);
+        fs.writeFileSync(file, Buffer.from(image.data, "base64"));
+        return file;
+      })
+    : [];
+  const args = provider === "claude" ? claudeArgs({ ...job, images }) : codexArgs({ ...job, imagePaths });
+  const input = provider === "claude"
+    ? claudeInput(job.prompt, images)
+    : `${job.system}\n\n---\n\n${job.prompt}`;
   const parser = provider === "claude" ? claudeParser() : codexParser();
 
   return new Promise((resolve, reject) => {

@@ -153,6 +153,8 @@ export async function handleJob(api, job, options, log, run = options?.run ?? ru
       provider: job.provider,
       system: job.system,
       prompt: job.prompt,
+      // A picture for the AI to read with the prompt (a scanned page), if any.
+      images: job.images,
       timeoutMs: Math.max(10, Number(job.timeout_seconds) || 240) * 1000,
       model,
       keepApiKeys: options.keepApiKeys,

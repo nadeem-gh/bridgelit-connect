@@ -118,13 +118,39 @@ export function retryAfterSeconds(error, now = Date.now()) {
   return Number.isFinite(at) ? Math.max(1, Math.ceil((at - now) / 1000)) : DEFAULT_RETRY_AFTER;
 }
 
-async function runAnthropic({ key, model, system, prompt, onPartial, signal }) {
+/** Pictures a job sends with its prompt (a scanned page): [{media_type, data}], checked. */
+export function jobImages(images) {
+  if (!Array.isArray(images)) return [];
+  const allowed = new Set(["image/jpeg", "image/png", "image/webp"]);
+  return images
+    .filter((i) => i && allowed.has(i.media_type) && typeof i.data === "string" && i.data)
+    .slice(0, 4);
+}
+
+/** The user message content: the prompt, with the job's pictures (a scanned page) first. */
+function anthropicContent(prompt, images) {
+  if (!images?.length) return prompt;
+  return [
+    ...images.map((i) => ({ type: "image", source: { type: "base64", media_type: i.media_type, data: i.data } })),
+    { type: "text", text: prompt },
+  ];
+}
+
+function openaiContent(prompt, images) {
+  if (!images?.length) return prompt;
+  return [
+    ...images.map((i) => ({ type: "image_url", image_url: { url: `data:${i.media_type};base64,${i.data}` } })),
+    { type: "text", text: prompt },
+  ];
+}
+
+async function runAnthropic({ key, model, system, prompt, images, onPartial, signal }) {
   const stream = client("anthropic_api", key).beta.messages.stream(
     {
       model,
       max_tokens: MAX_OUTPUT_TOKENS,
       system,
-      messages: [{ role: "user", content: prompt }],
+      messages: [{ role: "user", content: anthropicContent(prompt, images) }],
       // A declined request is re-run on Anthropic's recommended fallback model.
       betas: ["server-side-fallback-2026-07-01"],
       fallbacks: "default",
@@ -149,7 +175,7 @@ async function runAnthropic({ key, model, system, prompt, onPartial, signal }) {
   return answer || text;
 }
 
-async function runOpenAI({ key, model, system, prompt, onPartial, signal }) {
+async function runOpenAI({ key, model, system, prompt, images, onPartial, signal }) {
   const stream = await client("openai_api", key).chat.completions.create(
     {
       model,
@@ -157,7 +183,7 @@ async function runOpenAI({ key, model, system, prompt, onPartial, signal }) {
       stream: true,
       messages: [
         { role: "system", content: system },
-        { role: "user", content: prompt },
+        { role: "user", content: openaiContent(prompt, images) },
       ],
     },
     { signal },
@@ -185,8 +211,9 @@ export async function runApiProvider(job, keyFor = storedKey) {
     [AbortSignal.timeout(job.timeoutMs), job.signal].filter(Boolean),
   );
   const run = job.provider === "anthropic_api" ? runAnthropic : runOpenAI;
+  const images = jobImages(job.images);
   try {
-    const answer = await run({ ...job, key, model: job.model || DEFAULT_MODELS[job.provider], signal });
+    const answer = await run({ ...job, images, key, model: job.model || DEFAULT_MODELS[job.provider], signal });
     if (!answer.trim()) throw new ProviderError(`${API_LABELS[job.provider]}: empty answer.`);
     return answer.trim();
   } catch (error) {
