@@ -13,8 +13,8 @@ test("server must be https except on localhost", () => {
 
 test("connect pages follow the server", () => {
   assert.deepEqual(connectPages("https://www.bridgelit.net"), {
-    reader: "https://read.bridgelit.net/connect",
-    author: "https://author.bridgelit.net/connect",
+    reader: "https://explore.bridgelit.net/connect",
+    author: "https://create.bridgelit.net/connect",
   });
   assert.equal(connectPages("http://localhost:8000").reader, "http://localhost:3100/connect");
 });
