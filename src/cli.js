@@ -68,7 +68,7 @@ function session() {
   const config = readConfig();
   if (!config.server) return null;
   const token = loadToken(config.server, config.store);
-  return token ? { config, api: new Api(config.server, token) } : null;
+  return token ? { config, api: new Api(config.server, token), token } : null;
 }
 
 /** Keep the device token from an approved login, replacing this computer's old one. */
@@ -201,7 +201,11 @@ async function start(args) {
     await runAgent(current.api, options, log, controller.signal);
   } catch (error) {
     if (error instanceof RevokedError) {
-      deleteToken(current.config.server, current.config.store);
+      // Only forget our own token: a fresh login (the install line run again) may
+      // have saved a new one under the same key while this copy kept running.
+      if (loadToken(current.config.server, current.config.store) === current.token) {
+        deleteToken(current.config.server, current.config.store);
+      }
       log(error.message);
       return 1;
     }

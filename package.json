@@ -1,6 +1,6 @@
 {
   "name": "bridgelit-connect",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "Answer BridgeLit questions with your own Claude, ChatGPT or Google (Gemini) subscription, from your own computer.",
   "type": "module",
   "bin": {

@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-export const VERSION = "0.9.0";
+export const VERSION = "0.9.1";
 export const DEFAULT_SERVER = "https://bridgelit.net";
 
 export function configDir() {
@@ -68,5 +68,5 @@ export function connectPages(server) {
     return { reader: "http://localhost:3100/connect", author: "http://localhost:3200/connect" };
   }
   const base = hostname.replace(/^www\./, "");
-  return { reader: `https://read.${base}/connect`, author: `https://author.${base}/connect` };
+  return { reader: `https://explore.${base}/connect`, author: `https://create.${base}/connect` };
 }
