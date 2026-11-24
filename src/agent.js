@@ -20,7 +20,7 @@ const BUSY_HELLO_MS = 20_000;
 // LOCAL_WAIT_MAX_S), then hand the job back to BridgeLit to send again later.
 const RATE_RETRIES = 2;
 const LOCAL_WAIT_MAX_S = 60;
-const MODEL_REFUSED = /model[^\n]{0,80}(not found|not supported|unknown|invalid|does not exist|not available|isn't available)|model_not_found/i;
+const MODEL_REFUSED = /model[^\n]{0,80}(not found|not supported|unknown|invalid|does not exist|not available|isn't available|not recognized)|model_not_found/i;
 
 /** Jobs to run at once: the server's limit, lowered by ``--parallel``; one with --approve. */
 export function parallelLimit(serverMax, options = {}) {

@@ -10,7 +10,7 @@ passwords or keys given to BridgeLit.
  │ you type a question           │◄──────────►│ bridgelit-connect            │
  │ server picks book passages    │ (outbound  │  └─ claude -p  (Claude plan) │
  │ shows the checked answer      │   only)    │  └─ codex exec (ChatGPT plan)│
- └───────────────────────────────┘            │  └─ gemini     (Google plan) │
+ └───────────────────────────────┘            │  └─ agy        (Google plan) │
                                               │  └─ your API key (keychain)  │
                                               └──────────────────────────────┘
 ```
@@ -29,7 +29,7 @@ it shows into Terminal (macOS / Linux) or PowerShell (Windows). The line carries
    checks its SHA-256;
 2. installs this package into `~/.bridgelit` (no admin password, no `sudo`);
 3. connects the computer with the code (`bridgelit-connect login --token …`);
-4. installs Claude Code, Codex or Gemini CLI if missing and opens its sign-in;
+4. installs Claude Code, Codex or Antigravity CLI if missing and opens its sign-in;
 5. starts Connect now and at every login (`service install`).
 
 Remove everything again with
@@ -51,11 +51,17 @@ Then pick one or more ways to pay for answers:
 | Claude plan (Pro / Max), no key | `bridgelit-connect setup claude` | Installs Claude Code and runs `claude auth login` |
 | ChatGPT plan (Plus / Pro / Team), no key | `bridgelit-connect setup chatgpt` | Installs OpenAI's Codex CLI and runs `codex login` (choose "Sign in with ChatGPT") |
 | Anthropic API key | `bridgelit-connect key add anthropic` | Checks the key, then stores it in your keychain |
-| Gemini plan (Google AI Pro / Ultra, Code Assist), no key | `bridgelit-connect setup gemini` | Installs Google's Gemini CLI and runs it once: choose "Sign in with Google", then `/quit` |
+| Gemini on your Google plan (Google AI Free / Pro / Ultra), no key | `bridgelit-connect setup antigravity` | Installs Google's Antigravity CLI (`agy`) with Google's installer and runs it once: sign in with Google, paste the code back, then `/exit` |
+| Gemini Code Assist Standard / Enterprise, no key | `bridgelit-connect setup gemini` | Installs Google's Gemini CLI and runs it once: choose "Sign in with Google", then `/quit`. Google no longer serves Gemini CLI on personal plans (since 2026-06-18): use Antigravity for those |
 | OpenAI API key | `bridgelit-connect key add openai` | Checks the key, then stores it in your keychain |
 | Gemini API key (Google AI Studio) | `bridgelit-connect key add gemini` | Checks the key, then stores it in your keychain |
 
 `bridgelit-connect doctor` shows what is ready.
+
+> **Antigravity and Google's terms:** Google's Antigravity FAQ says wrapping `agy` inside third-party
+> applications isn't supported on consumer plans, and that using an Antigravity login with third-party
+> software can lead to account suspension. Use it at your own risk; the Gemini API key option is the
+> path Google recommends for apps like this.
 
 > **ChatGPT without an API key:** the ChatGPT desktop and web apps have no interface that other programs
 > can call. OpenAI's Codex CLI, signed in with your ChatGPT account, is the supported way to use a ChatGPT
@@ -88,16 +94,16 @@ starts it hidden at sign-in and restarts it if it stops.
 | `status` | Shows the server, this computer, and the AIs it offers. |
 | `doctor` | Checks Node, Claude Code and Codex are installed and signed in. |
 | `logout` | Disconnects this computer and deletes its token. |
-| `setup claude\|chatgpt\|gemini` | Installs Claude Code, Codex or Gemini CLI and opens its sign-in. |
+| `setup claude\|chatgpt\|antigravity\|gemini` | Installs Claude Code, Codex, Antigravity CLI or Gemini CLI and opens its sign-in. |
 | `key add\|remove anthropic\|openai\|gemini`, `key list` | Manages your own API keys (OS keychain, never uploaded). |
 
 API-key answers use `claude-opus-5-5`, `gpt-5.5` and `gemini-3.1-pro-preview` by default. Change them with
-`start --anthropic-model …`, `--openai-model …` or `--gemini-api-model …` (Gemini CLI: `--gemini-model …`).
+`start --anthropic-model …`, `--openai-model …` or `--gemini-api-model …` (Gemini CLI: `--gemini-model …`; Antigravity: `--antigravity-model …`, see `agy models`).
 A model you pick in BridgeLit always wins over these. Claude API requests opt into Anthropic's server-side
 refusal fallback (`fallbacks: "default"`).
 
 Environment: `BRIDGELIT_ANTHROPIC_BASE_URL` / `BRIDGELIT_OPENAI_BASE_URL` / `BRIDGELIT_GEMINI_BASE_URL` (proxies only), `BRIDGELIT_SERVER` (default `https://bridgelit.net`), `BRIDGELIT_CLAUDE_PATH`,
-`BRIDGELIT_CODEX_PATH`, `BRIDGELIT_GEMINI_PATH`, `BRIDGELIT_CONNECT_HOME` (config folder),
+`BRIDGELIT_CODEX_PATH`, `BRIDGELIT_GEMINI_PATH`, `BRIDGELIT_AGY_PATH` (default: `agy` on PATH, else `~/.local/bin/agy`), `BRIDGELIT_CONNECT_HOME` (config folder),
 `BRIDGELIT_CREDENTIAL_STORE=file` (skip the OS keychain on headless machines).
 
 ## Pictures
@@ -161,6 +167,13 @@ See [SECURITY.md](SECURITY.md). In short:
     no context files; `--allowed-mcp-server-names` allows no MCP server; BridgeLit's system prompt
     replaces the CLI's agent prompt (`GEMINI_SYSTEM_MD`). Gemini CLI can't read page pictures this way,
     so OCR polish with pictures needs the Gemini API key.
+  - **Antigravity (`agy`):** the run folder holds a custom agent (`.agents/agents/bridgelit.md`,
+    picked with `--agent`) with `tools: []` and no MCP servers, whose body is BridgeLit's system prompt;
+    the model is offered no file, shell, web, browser or MCP tool (only `manage_task`, which sees the
+    run's own background tasks, and there are none). Per-run `--settings` (never saved) deny every
+    `command`, `read_file`, `write_file`, `read_url`, `execute_url`, `download_url` and `mcp` call and set
+    `toolPermission: strict`, so a tool that slipped through still can't act; `--sandbox` adds the
+    terminal sandbox. Text only: page pictures need the Gemini API key.
 - If the model tries to use any tool anyway, for example because a book passage contains planted
   instructions, the run is killed and the answer is thrown away.
 - An answer that looks like a key, token or private path from this computer is never sent back.

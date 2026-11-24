@@ -22,7 +22,7 @@ const KEY = "AIzaSyTESTKEYTESTKEYTESTKEYTESTKEY12345";
 test("gemini and gemini_api are providers with labels", () => {
   assert.ok(PROVIDERS.includes("gemini"));
   assert.ok(PROVIDERS.includes("gemini_api"));
-  assert.equal(LABELS.gemini, "Gemini");
+  assert.equal(LABELS.gemini, "Gemini CLI");
   assert.equal(LABELS.gemini_api, "Gemini API key");
   assert.equal(apiProviderFor("gemini"), "gemini_api");
   assert.equal(apiProviderFor("Google"), "gemini_api");
