@@ -1,8 +1,9 @@
 // Runs one prompt through the user's own `claude` (Claude Code), `codex`
-// (OpenAI Codex CLI) or `gemini` (Gemini CLI), signed in with their own plan.
+// (OpenAI Codex CLI), `gemini` (Gemini CLI) or `agy` (Google Antigravity CLI),
+// signed in with their own plan.
 //
 // Each run is locked down: an empty temporary folder, no MCP servers, and for
-// Claude and Gemini no tools at all (see gemini.js). If the model tries to use a tool anyway (read a file,
+// Claude, Gemini and Antigravity no tools at all (see gemini.js, antigravity.js). If the model tries to use a tool anyway (read a file,
 // run a command, browse), the run is stopped and nothing is sent back.
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -10,14 +11,23 @@ import os from "node:os";
 import path from "node:path";
 import { API_LABELS, KEY_NAMES, jobImages, keyedProviders, runApiProvider } from "./apikeys.js";
 import { ProviderError, ToolAttempt } from "./errors.js";
+import {
+  antigravityArgs,
+  antigravityInput,
+  antigravityParser,
+  antigravityPath,
+  antigravityRunFiles,
+  antigravitySignedIn,
+} from "./antigravity.js";
 import { geminiArgs, geminiParser, geminiRunFiles, geminiSignedIn } from "./gemini.js";
 
-export const PROVIDERS = ["claude", "codex", "gemini", "anthropic_api", "openai_api", "gemini_api"];
-const CLI_PROVIDERS = ["claude", "codex", "gemini"];
+export const PROVIDERS = ["claude", "codex", "gemini", "antigravity", "anthropic_api", "openai_api", "gemini_api"];
+const CLI_PROVIDERS = ["claude", "codex", "gemini", "antigravity"];
 export const LABELS = {
   claude: "Claude",
   codex: "ChatGPT (Codex)",
-  gemini: "Gemini",
+  gemini: "Gemini CLI",
+  antigravity: "Gemini (Antigravity)",
   anthropic_api: "Claude API key",
   openai_api: "OpenAI API key",
   gemini_api: "Gemini API key",
@@ -31,6 +41,7 @@ const API_KEY_VARS = {
   claude: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX"],
   codex: ["OPENAI_API_KEY", "CODEX_API_KEY", "OPENAI_BASE_URL", "AZURE_OPENAI_API_KEY"],
   gemini: ["GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GEMINI_BASE_URL", "GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_VERTEX_BASE_URL"],
+  antigravity: ["GEMINI_API_KEY", "GOOGLE_API_KEY", "AGY_ADC_AUTH", "GOOGLE_APPLICATION_CREDENTIALS"],
 };
 
 const CODEX_TOOL_ITEMS = new Set(["command_execution", "file_change", "mcp_tool_call", "web_search", "tool_call"]);
@@ -38,6 +49,7 @@ const CODEX_TOOL_ITEMS = new Set(["command_execution", "file_change", "mcp_tool_
 export { ProviderError, ToolAttempt };
 
 function cliPath(provider) {
+  if (provider === "antigravity") return antigravityPath();
   return process.env[CLI_PATH_ENV[provider]] || provider;
 }
 
@@ -104,6 +116,25 @@ export function detect() {
     };
   } else {
     out.gemini = { installed: false, version: "", ready: false, note: "Not installed." };
+  }
+  const agy = quick(cliPath("antigravity"), ["--version"]);
+  if (agy.ok) {
+    const help = quick(cliPath("antigravity"), ["--help"]).out;
+    // Per-run `--settings` (the deny rules) and `--agent` (no tools) came in 1.5.
+    const locked = help.includes("--settings") && help.includes("--agent") && help.includes("--sandbox");
+    const signedIn = antigravitySignedIn();
+    out.antigravity = {
+      installed: true,
+      version: agy.out.split("\n")[0],
+      ready: locked && signedIn,
+      note: !locked
+        ? "Update Antigravity CLI (agy update): this version can't turn tools off."
+        : signedIn
+          ? ""
+          : "Run `agy` and sign in with your Google account.",
+    };
+  } else {
+    out.antigravity = { installed: false, version: "", ready: false, note: "Not installed." };
   }
   const keyed = keyedProviders();
   for (const provider of Object.keys(API_LABELS)) {
@@ -288,12 +319,19 @@ export function codexParser() {
 
 export function friendlyError(provider, message) {
   const text = String(message ?? "");
-  if (/401|unauthori[sz]ed|invalid api key|please run \/login|not logged in|log ?in|auth method|set an auth/i.test(text)) {
+  if (/401|unauthori[sz]ed|invalid api key|please run \/login|not logged in|log ?in|auth method|set an auth|authentication (?:required|failed)/i.test(text)) {
     return {
       claude: "Claude isn't signed in on this computer. Run `claude`, then /login with your Claude subscription.",
       codex: "Codex isn't signed in on this computer. Run `codex login` and sign in with ChatGPT.",
       gemini: "Gemini isn't signed in on this computer. Run `gemini` and choose Sign in with Google.",
+      antigravity: "Antigravity isn't signed in on this computer. Run `agy` and sign in with your Google account.",
     }[provider] ?? `${LABELS[provider]} isn't signed in on this computer.`;
+  }
+  if (provider === "gemini" && /no longer supported for Gemini Code Assist/i.test(text)) {
+    return "Google no longer serves Gemini CLI on personal Google plans. Use Antigravity instead: bridgelit-connect setup antigravity.";
+  }
+  if (provider === "antigravity" && /RESOURCE_EXHAUSTED|quota|credits/i.test(text)) {
+    return "Your Google AI plan is at its Antigravity usage limit right now. Try again later.";
   }
   if (provider === "gemini" && /RESOURCE_EXHAUSTED|quota/i.test(text)) {
     return "Your Gemini plan is at its usage limit right now. Try again later.";
@@ -325,6 +363,12 @@ function runCli(job) {
       new ProviderError("Gemini CLI can't read page pictures with its tools off. Use your Gemini API key for this."),
     );
   }
+  if (provider === "antigravity" && images.length) {
+    // agy takes text-only messages; it reads pictures only through its file tools, which stay off.
+    return Promise.reject(
+      new ProviderError("Antigravity can't read page pictures with its tools off. Use your Gemini API key for this."),
+    );
+  }
   const workdir = fs.mkdtempSync(path.join(os.tmpdir(), "bridgelit-"));
   // Codex reads pictures from files; they live in the job's own folder.
   const imagePaths = provider === "codex"
@@ -335,18 +379,31 @@ function runCli(job) {
       })
     : [];
   const gemini = provider === "gemini" ? geminiRunFiles(workdir, job.system) : null;
+  const agy = provider === "antigravity";
+  if (agy) antigravityRunFiles(workdir, job.system);
   const args = provider === "claude"
     ? claudeArgs({ ...job, images })
     : gemini
       ? geminiArgs({ ...job, policyPath: gemini.policyPath })
-      : codexArgs({ ...job, imagePaths });
-  // Gemini gets BridgeLit's system prompt from a file (GEMINI_SYSTEM_MD).
+      : agy
+        ? antigravityArgs(job)
+        : codexArgs({ ...job, imagePaths });
+  // Gemini gets BridgeLit's system prompt from a file (GEMINI_SYSTEM_MD); Antigravity
+  // from the run folder's agent file.
   const input = provider === "claude"
     ? claudeInput(job.prompt, images)
     : gemini
       ? job.prompt
-      : `${job.system}\n\n---\n\n${job.prompt}`;
-  const parser = provider === "claude" ? claudeParser() : gemini ? geminiParser() : codexParser();
+      : agy
+        ? antigravityInput(job.prompt)
+        : `${job.system}\n\n---\n\n${job.prompt}`;
+  const parser = provider === "claude"
+    ? claudeParser()
+    : gemini
+      ? geminiParser()
+      : agy
+        ? antigravityParser()
+        : codexParser();
 
   return new Promise((resolve, reject) => {
     let settled = false;

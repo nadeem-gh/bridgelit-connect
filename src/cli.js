@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import os from "node:os";
 import readline from "node:readline";
 import { setTimeout as wait } from "node:timers/promises";
+import { antigravityPath } from "./antigravity.js";
 import { Api, ApiError } from "./api.js";
 import { API_LABELS, apiProviderFor, checkKey, keyedProviders, looksLikeKey, removeKey, saveKey } from "./apikeys.js";
 import { RevokedError, runAgent } from "./agent.js";
@@ -21,10 +22,11 @@ Usage:
   bridgelit-connect login --token CODE                   connect with the code in a BridgeLit install line
   bridgelit-connect start [--approve]                    stay connected and answer questions
   bridgelit-connect status                               show the connection
-  bridgelit-connect doctor                               check Claude / Codex / Gemini are ready
+  bridgelit-connect doctor                               check Claude / Codex / Gemini / Antigravity are ready
   bridgelit-connect logout                               disconnect this computer
   bridgelit-connect service install|uninstall            start automatically at login
-  bridgelit-connect setup claude|chatgpt|gemini          install Claude Code, Codex or Gemini CLI and sign in
+  bridgelit-connect setup claude|chatgpt|antigravity     install Claude Code, Codex or Antigravity CLI and sign in
+  bridgelit-connect setup gemini                         install Gemini CLI (Code Assist Standard/Enterprise only)
   bridgelit-connect key add|remove anthropic|openai|gemini  use your own API key (kept in your keychain)
   bridgelit-connect key list                             show which API keys are stored
 
@@ -36,6 +38,7 @@ Options:
   --claude-model M    model for Claude, e.g. sonnet (default: Claude Code's default)
   --codex-model M     model for Codex (default: Codex's default)
   --gemini-model M    model for Gemini CLI, e.g. gemini-3.8-flash (default: Gemini CLI's default)
+  --antigravity-model M  model for Antigravity, e.g. gemini-3.8-flash-medium (see \`agy models\`)
   --anthropic-model M model for your Claude API key (default: claude-opus-5-5)
   --openai-model M    model for your OpenAI API key (default: gpt-5.5)
   --gemini-api-model M  model for your Gemini API key (default: gemini-3.1-pro-preview)
@@ -178,6 +181,7 @@ async function start(args) {
       ...(args["anthropic-model"] ? { anthropic_api: args["anthropic-model"] } : {}),
       ...(args["openai-model"] ? { openai_api: args["openai-model"] } : {}),
       ...(args["gemini-model"] ? { gemini: args["gemini-model"] } : {}),
+      ...(args["antigravity-model"] ? { antigravity: args["antigravity-model"] } : {}),
       ...(args["gemini-api-model"] ? { gemini_api: args["gemini-api-model"] } : {}),
     },
     imageModel: args["openai-image-model"] ?? current.config.image_model,
@@ -233,7 +237,7 @@ function doctor() {
   }
   if (!found.claude.installed) console.log("  Set up Claude (no API key): bridgelit-connect setup claude");
   if (!found.codex.installed) console.log("  Set up ChatGPT (no API key): bridgelit-connect setup chatgpt");
-  if (!found.gemini.installed) console.log("  Set up Gemini (no API key): bridgelit-connect setup gemini");
+  if (!found.antigravity.installed) console.log("  Set up Gemini on your Google plan (no API key): bridgelit-connect setup antigravity");
   if (process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY) {
     console.log("Note: an API key is set in your shell. BridgeLit Connect hides it from the CLIs so your subscription is used (pass --use-api-keys to change that).");
   }
@@ -313,17 +317,32 @@ const SETUP = {
   chatgpt: { label: "Codex (ChatGPT)", pkg: "@openai/codex", account: "ChatGPT", login: ["codex", ["login"]] },
   // Gemini CLI has no login command: it asks on its first run. Choose
   // "Sign in with Google", then type /quit.
+  // Google serves Gemini CLI only on Code Assist Standard / Enterprise now.
   gemini: { label: "Gemini CLI", pkg: "@google/gemini-cli", account: "Google", login: ["gemini", []] },
+  // Antigravity CLI is a native binary from Google's own installer, not npm. It
+  // asks for a Google sign-in on its first run; paste the code it shows, then /exit.
+  antigravity: {
+    label: "Antigravity CLI",
+    installer: "curl -fsSL https://antigravity.google/cli/install.sh | bash",
+    account: "Google",
+    login: [antigravityPath, []],
+  },
 };
-const SETUP_ALIASES = { codex: "chatgpt", google: "gemini" };
+const SETUP_ALIASES = { codex: "chatgpt", google: "antigravity", agy: "antigravity" };
 
 /** Install Claude Code, Codex or Gemini CLI and open its sign-in, so the user's plan can be used. */
 function setup(name) {
   const what = SETUP[SETUP_ALIASES[name] ?? name];
-  if (!what) throw new Error("Use `setup claude`, `setup chatgpt` or `setup gemini`.");
+  if (!what) throw new Error("Use `setup claude`, `setup chatgpt`, `setup antigravity` or `setup gemini`.");
   const shell = process.platform === "win32";
-  const installed = spawnSync(what.login[0], ["--version"], { shell, encoding: "utf8" }).status === 0;
-  if (!installed) {
+  const command = () => (typeof what.login[0] === "function" ? what.login[0]() : what.login[0]);
+  const installed = spawnSync(command(), ["--version"], { shell, encoding: "utf8" }).status === 0;
+  if (!installed && what.installer) {
+    if (shell) throw new Error(`Install ${what.label} from https://antigravity.google, then run \`agy\` and sign in.`);
+    console.log(`Installing ${what.label} with Google's installer: ${what.installer}`);
+    const r = spawnSync("bash", ["-c", what.installer], { stdio: "inherit" });
+    if (r.status !== 0) throw new Error(`Install failed. Run it yourself: ${what.installer}`);
+  } else if (!installed) {
     console.log(`Installing ${what.label}: npm install -g ${what.pkg}`);
     const r = spawnSync("npm", ["install", "-g", what.pkg], { stdio: "inherit", shell });
     if (r.status !== 0) throw new Error(`Install failed. Run it yourself: npm install -g ${what.pkg}`);
@@ -332,8 +351,11 @@ function setup(name) {
   if (what.pkg === "@google/gemini-cli") {
     console.log("Pick \"Sign in with Google\" when Gemini asks, then type /quit once it's ready.");
   }
-  const r = spawnSync(what.login[0], what.login[1], { stdio: "inherit", shell });
-  if (r.status !== 0) throw new Error(`Sign-in didn't finish. Run \`${what.login[0]} ${what.login[1].join(" ")}\` yourself.`);
+  if (what.installer) {
+    console.log("Sign in with Google in the browser, paste the code back here, then type /exit once it's ready.");
+  }
+  const r = spawnSync(command(), what.login[1], { stdio: "inherit", shell });
+  if (r.status !== 0) throw new Error(`Sign-in didn't finish. Run \`${command()} ${what.login[1].join(" ")}\` yourself.`);
   console.log("Done. Check with `bridgelit-connect doctor`.");
   return 0;
 }
